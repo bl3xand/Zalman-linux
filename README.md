@@ -26,8 +26,8 @@ sudo pacman -S python python-pillow python-numpy python-psutil libusb ffmpeg
 ## Установка
 
 ```bash
-git clone https://github.com/YOURNAME/zalman-display
-cd zalman-display
+git clone https://github.com/bl3xand/Zalman-linux
+cd Zalman-linux
 pip install --user .          # даст команду `zalman-display`
 # или запускать из исходников: python3 -m zalman_lcd <команда>
 ```
