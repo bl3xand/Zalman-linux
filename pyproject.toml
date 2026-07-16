@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zalman-lcd"
+version = "0.1.0"
+description = "Linux driver and CLI service for the Zalman Alpha 2 AIO LCD display"
+readme = "README.md"
+requires-python = ">=3.7"
+license = { text = "MIT" }
+authors = [{ name = "zalman-lcd contributors" }]
+keywords = ["zalman", "alpha2", "lcd", "aio", "cooler", "linux"]
+dependencies = [
+    "Pillow>=8.0",
+    "psutil>=5.7",
+    "numpy>=1.20",
+]
+
+[project.optional-dependencies]
+# video playback also requires the external `ffmpeg` binary and libusb-1.0
+dev = ["ruff"]
+
+[project.urls]
+Homepage = "https://github.com/YOURNAME/zalman-display"
+
+[project.scripts]
+zalman-display = "zalman_lcd.cli:main"
+
+[tool.setuptools]
+packages = ["zalman_lcd"]

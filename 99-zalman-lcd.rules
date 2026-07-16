@@ -1,0 +1,5 @@
+# Доступ к дисплею Zalman Alpha 2 (USB 0483:5740) без root — для libusb.
+# Установка:
+#   sudo cp 99-zalman-lcd.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload && sudo udevadm trigger
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="5740", MODE="0666", TAG+="uaccess"
