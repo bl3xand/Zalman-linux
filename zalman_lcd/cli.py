@@ -20,7 +20,7 @@ ROTATIONS = (0, 90, 180, 270)
 def set_background(path):
     if path is None or str(path).lower() in ("none", "off", ""):
         cfgmod.clear_background_cache()
-        cfgmod.update(background=None)
+        cfgmod.update(background=None, bg_name=None)
         print("Background cleared (black).")
         return
     p = os.path.abspath(os.path.expanduser(path))
@@ -28,16 +28,8 @@ def set_background(path):
         print("File not found:", p)
         return
     cached = cfgmod.cache_background(p)     # copy into cache, old one removed
-    cfgmod.update(background=cached)
+    cfgmod.update(background=cached, bg_name=os.path.basename(p))
     print("Background set:", os.path.basename(p), "(cached, previous removed)")
-
-
-def rotate_step():
-    """Rotate by +90° (cycles 0 -> 90 -> 180 -> 270 -> 0)."""
-    cur = int(cfgmod.load().get("rotate", 0))
-    nxt = (cur + 90) % 360
-    cfgmod.update(rotate=nxt)
-    print("Rotation: %d°" % nxt)
 
 
 def set_rotate(v):
@@ -80,19 +72,20 @@ def cmd_run(argv):
 
 def apply_flags(argv):
     ap = argparse.ArgumentParser(
-        prog="zalman-display",
-        description="Control the Zalman Alpha 2 LCD (run with no args for a menu)")
+        prog="zalman-display", add_help=True,
+        description="Control the Zalman Alpha 2 LCD. Changes apply live "
+                    "(the running service picks them up).")
     ap.add_argument("--set", "--image", dest="image", metavar="PATH",
-                    help="background: path to image/video/gif (or 'none')")
-    ap.add_argument("--rotate", type=int, choices=ROTATIONS,
-                    help="set rotation 0/90/180/270")
-    ap.add_argument("--brightness", type=int, metavar="0-100")
-    ap.add_argument("--text-color", dest="color", metavar="HEX")
-    ap.add_argument("--position", choices=("up", "down"))
+                    help="background: path to image / gif / video (or 'none')")
+    ap.add_argument("--rotate", type=int, choices=ROTATIONS, metavar="0|90|180|270",
+                    help="screen rotation")
+    ap.add_argument("--brightness", type=int, metavar="0-100", help="0..100")
+    ap.add_argument("--text-color", dest="color", metavar="HEX",
+                    help="stats text color, e.g. 00FFAA")
+    ap.add_argument("--position", choices=("up", "down"),
+                    help="where the stats text goes")
     ap.add_argument("--stats", choices=("on", "off"),
-                    help="show/hide the monitoring line")
-    ap.add_argument("--strip", choices=("on", "off"),
-                    help="semi-transparent strip behind the text")
+                    help="show / hide the monitoring line")
     a = ap.parse_args(argv)
     did = False
     if a.image is not None:
@@ -108,11 +101,10 @@ def apply_flags(argv):
     if a.stats is not None:
         cfgmod.update(show_stats=(a.stats == "on")); did = True
         print("Stats line:", a.stats)
-    if a.strip is not None:
-        cfgmod.update(text_bg=(a.strip == "on")); did = True
-        print("Text strip:", a.strip)
     if not did:
         ap.print_help()
+        print("\nService: zalman-display service install|start|stop|restart|status"
+              "\nOther:   zalman-display detect | log [-f]")
 
 
 # ------------------------------ service ------------------------------
@@ -166,76 +158,22 @@ def cmd_service(argv):
         systemctl(action, SERVICE)
 
 
-# --------------------------- interactive menu ---------------------------
-def _ask(prompt):
-    try:
-        return input(prompt).strip()
-    except (EOFError, KeyboardInterrupt):
-        return "0"
-
-
-def menu():
-    while True:
-        c = cfgmod.load()
-        print("\n=== Zalman Display ===")
-        print(" device: %s | service: %s"
-              % ("found" if device.available() else "NOT found",
-                 service_status()))
-        print(" background=%s  brightness=%d  rotation=%d°  color=%s  stats=%s(%s)"
-              % (os.path.basename(c["background"]) if c["background"] else "none",
-                 c["brightness"], c["rotate"], c["text_color"],
-                 "on" if c["show_stats"] else "off", c["position"]))
-        print("""  1) Set background (image / gif / video)
-  2) Clear background (black)
-  3) Brightness (0-100)
-  4) Rotate 90°
-  5) Text color (HEX)
-  6) Stats position (top/bottom)
-  7) Stats line on/off
-  8) Text strip on/off
-  9) Service: 1 start / 2 stop / 3 restart / 4 status
- 10) Install autostart service
-  0) Exit""")
-        ch = _ask("Choice: ")
-        if ch in ("0", ""):
-            break
-        elif ch == "1":
-            set_background(_ask("Path to file: "))
-        elif ch == "2":
-            set_background(None)
-        elif ch == "3":
-            v = _ask("Brightness 0-100: ")
-            if v.isdigit():
-                set_brightness(int(v))
-        elif ch == "4":
-            rotate_step()
-        elif ch == "5":
-            set_color(_ask("Color HEX (e.g. 00FFAA): "))
-        elif ch == "6":
-            v = _ask("Position [1] top / [2] bottom: ")
-            set_position("up" if v == "1" else "down")
-        elif ch == "7":
-            cur = cfgmod.load()["show_stats"]
-            cfgmod.update(show_stats=not cur)
-            print("Stats line:", "off" if cur else "on")
-        elif ch == "8":
-            cur = cfgmod.load()["text_bg"]
-            cfgmod.update(text_bg=not cur)
-            print("Text strip:", "off" if cur else "on")
-        elif ch == "9":
-            s = _ask("  [1] start [2] stop [3] restart [4] status: ")
-            cmd_service({"1": ["start"], "2": ["stop"], "3": ["restart"],
-                         "4": ["status"]}.get(s, ["status"]))
-        elif ch == "10":
-            install_service()
-    print("Done.")
+# ------------------------------ status ------------------------------
+def print_status():
+    c = cfgmod.load()
+    bg = c.get("bg_name") or (os.path.basename(c["background"])
+                              if c["background"] else "none")
+    print("=== Zalman Display ===")
+    print(" device: %s | service: %s"
+          % ("found" if device.available() else "NOT found", service_status()))
+    print(" background=%s  brightness=%d  rotation=%d°  color=%s  stats=%s(%s)\n"
+          % (bg, c["brightness"], c["rotate"], c["text_color"],
+             "on" if c["show_stats"] else "off", c["position"]))
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    if not argv:
-        return menu()
-    head = argv[0]
+    head = argv[0] if argv else ""
     if head == "run":
         return cmd_run(argv[1:])
     if head == "service":
@@ -244,8 +182,9 @@ def main(argv=None):
         return cmd_detect()
     if head == "log":
         return cmd_log(argv[1:])
-    if head in ("menu", "-i"):
-        return menu()
+    if not argv:                    # без аргументов — статус + справка по флагам
+        print_status()
+        return apply_flags([])
     return apply_flags(argv)
 
 

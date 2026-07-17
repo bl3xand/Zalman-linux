@@ -14,7 +14,8 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 CACHE_DIR = os.path.join(CONFIG_DIR, "media")   # ровно 1 файл фона
 
 DEFAULTS = {
-    "background": None,        # путь к картинке/gif/видео (None => чёрный фон)
+    "background": None,        # путь к КЭШУ картинки/gif/видео (None => чёрный)
+    "bg_name": None,           # исходное имя файла (для показа в статусе)
     "brightness": 80,          # 0..100
     "rotate": 0,               # 0/90/180/270
     "fps": 20,                 # частота для видео/gif

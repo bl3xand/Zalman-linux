@@ -42,46 +42,25 @@ sudo cp 99-zalman-lcd.rules /etc/udev/rules.d/
 sudo udevadm control --reload && sudo udevadm trigger
 ```
 
-## Quick start
+## Usage
 
 ```bash
-zalman-display                       # interactive menu (below)
-zalman-display detect                # find the device
-zalman-display --set ~/clip.gif      # background: image / gif / video
-zalman-display --brightness 80       # brightness 0..100
+zalman-display                       # show current status + this help
+zalman-display --set ~/clip.gif      # background: image / gif / video (or 'none')
 zalman-display --rotate 90           # rotation 0/90/180/270
-zalman-display --position up         # stats line at top (or down)
-zalman-display --text-color 00FFAA   # stats color (HEX)
-zalman-display run                   # run the display (Ctrl+C to stop)
+zalman-display --brightness 70       # brightness 0..100
+zalman-display --text-color 00FFAA   # stats text color (HEX)
+zalman-display --position up         # stats text at top (or 'down')
+zalman-display --stats off           # hide / show the monitoring line
+
+zalman-display detect                # is the device present?
+zalman-display log [-f]              # view (or follow) the diagnostic log
+zalman-display run                   # run the display in the foreground
 ```
 
-While the service/daemon is running, any command above applies **live** (the
-daemon watches the config file).
-
-## Interactive menu
-
-Run with no arguments:
-
-```bash
-zalman-display
-```
-
-```
-=== Zalman Display ===
- device: found | service: active
- background=…  brightness=80  rotation=0°  color=FFFFFF  stats=on(down)
-  1) Set background (image / gif / video)   ← asks for a file path
-  2) Clear background (black)
-  3) Brightness (0-100)
-  4) Rotate 90°                             ← each press turns +90°
-  5) Text color (HEX)
-  6) Stats position (top/bottom)
-  7) Stats line on/off
-  8) Text strip on/off
-  9) Service: start / stop / restart / status
- 10) Install autostart service
-  0) Exit
-```
+Every setting applies **live** — the running service picks up the change (a new
+background/rotation is re-uploaded to flash; brightness/color/position update
+immediately). Flags can be combined, e.g. `--rotate 90 --brightness 60`.
 
 ## Autostart (service on boot)
 
