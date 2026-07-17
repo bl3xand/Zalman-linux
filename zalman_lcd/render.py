@@ -70,7 +70,7 @@ def _lines(sensors):
     gpu = "GPU %s%% %s" % (gl if gl is not None else "--",
                           "--" if gt is None else "%d°" % gt)
     ram = "RAM %.1f / %.1f GB" % (used, total) if total else "RAM --"
-    return [cpu, gpu, ram]      # 3 короткие строки -> крупный читаемый шрифт
+    return ["%s  %s" % (cpu, gpu), ram]     # CPU+GPU на одной строке, RAM на второй
 
 
 _MAX_SIZE = 24
@@ -83,7 +83,7 @@ def _fixed_size(sensors):
     if _fixed_size._cache:
         return _fixed_size._cache
     _, total = sensors.ram_gb()
-    tmpl = ["CPU 100% 100°", "GPU 100% 100°",
+    tmpl = ["CPU 100% 100°  GPU 100% 100°",
             "RAM %.1f / %.1f GB" % (total or 999.9, total or 999.9)]
     probe = ImageDraw.Draw(Image.new("RGBA", (2, 2)))
     size = _MAX_SIZE
@@ -118,7 +118,7 @@ class StatsBar:
         f = _font(_fixed_size(self.sensors))    # постоянный размер
         asc, desc = f.getmetrics()
         lh = asc + desc                 # полная высота строки (без приплюснутости)
-        pad, gap = 6, 8
+        pad, gap = 5, 2                 # плотный межстрочный интервал
         barh = pad * 2 + lh * len(lines) + gap * (len(lines) - 1)
         y0 = 0 if self.position == "up" else SCREEN[1] - barh
         # подложка под текстом (30% альфа) — off / white / black

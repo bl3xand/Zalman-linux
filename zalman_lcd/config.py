@@ -23,6 +23,7 @@ DEFAULTS = {
     "text_color": "FFFFFF",    # цвет строки, HEX
     "position": "down",        # up / down
     "stats_bg": "off",         # подложка под текстом: off / white / black (альфа 30%)
+    "gpu": "auto",             # какой GPU показывать: auto / nvidia / cardN
 }
 
 

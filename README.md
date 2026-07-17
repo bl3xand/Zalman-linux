@@ -54,8 +54,9 @@ zalman-display --text-color 00FFAA   # stats text color (HEX)
 zalman-display --position up         # stats text at top (or 'down')
 zalman-display --stats off           # hide / show the monitoring line
 zalman-display --stats-bg black      # strip behind the text: off / white / black (30% alpha)
+zalman-display --gpu list            # list GPUs; then e.g. --gpu card1 to pick one
 
-zalman-display detect                # is the device present?
+zalman-display detect                # device present? + available GPUs
 zalman-display log [-f]              # view (or follow) the diagnostic log
 zalman-display run                   # run the display in the foreground
 ```
@@ -81,7 +82,9 @@ zalman-display service start|stop|restart|status|uninstall
   so the original can be moved or removed.
 - Config: `~/.config/zalman-lcd/config.json`.
 - GPU metrics come from `nvidia-smi` (NVIDIA) or sysfs `/sys/class/drm` (AMD);
-  shown as `--` if unavailable.
+  shown as `--` if unavailable. With **multiple GPUs** (e.g. iGPU + dGPU) run
+  `zalman-display --gpu list` and pick the right one with `--gpu cardN`
+  (default `auto` takes the first with a temperature sensor).
 - The separate USB device `0145:2001` is the pump/fan/RGB controller (HID); it
   is not handled here.
 - The stats font (**JetBrains Mono Bold**, SIL OFL) is bundled in

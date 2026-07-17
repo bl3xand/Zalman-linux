@@ -61,8 +61,8 @@ class Daemon:
     def __init__(self, verbose=True):
         self.verbose = verbose
         self.running = True
-        self.sensors = Sensors()
         self.cfg = cfgmod.load()
+        self.sensors = Sensors(self.cfg.get("gpu", "auto"))
         self._cfg_mtime = cfgmod.mtime()
         self.stats = StatsBar(self.cfg, self.sensors)
         self._prep_key = None
@@ -164,7 +164,11 @@ class Daemon:
         m = cfgmod.mtime()
         if m != self._cfg_mtime:
             self._cfg_mtime = m
+            old_gpu = self.cfg.get("gpu", "auto")
             self.cfg = cfgmod.load()
+            if self.cfg.get("gpu", "auto") != old_gpu:
+                self.sensors.retarget(self.cfg.get("gpu", "auto"))
+                self._ov_key = None          # значения GPU сменятся -> перерисовать
             self.stats.update(self.cfg)
             self._prepare()
             self._last_brightness = None

@@ -18,14 +18,19 @@ except Exception:
 
 
 class Sensors:
-    def __init__(self):
-        self._gpu = _detect_gpu()
+    def __init__(self, prefer="auto"):
+        self._gpu = _detect_gpu(prefer)
         # прогрев cpu_percent (первый вызов возвращает 0)
         if psutil:
             try:
                 psutil.cpu_percent(interval=None)
             except Exception:
                 pass
+        self._nvidia_cache = (0.0, None)
+
+    def retarget(self, prefer):
+        """Переключить источник GPU (по выбору пользователя)."""
+        self._gpu = _detect_gpu(prefer)
         self._nvidia_cache = (0.0, None)
 
     # ---- CPU ----
@@ -192,7 +197,17 @@ def _hwmon_temp():
     return None
 
 
-def _detect_gpu():
+def _detect_gpu(prefer="auto"):
+    """Вернуть 'nvidia' или путь /sys/class/drm/cardN. prefer — id из list_gpus()
+    ('nvidia'/'card0'/'card1'/…) либо 'auto'. Неверный prefer -> авто."""
+    prefer = prefer or "auto"
+    if prefer != "auto":
+        if prefer == "nvidia" and shutil.which("nvidia-smi"):
+            return "nvidia"
+        p = os.path.join("/sys/class/drm", prefer)
+        if prefer.startswith("card") and os.path.isdir(p):
+            return p
+        # неверный выбор — падаем в авто
     if shutil.which("nvidia-smi"):
         return "nvidia"
     for card in sorted(glob.glob("/sys/class/drm/card[0-9]")):
@@ -200,6 +215,37 @@ def _detect_gpu():
         if glob.glob(os.path.join(dev, "hwmon", "hwmon*", "temp1_input")):
             return card
     return None
+
+
+def list_gpus():
+    """Список доступных GPU для выбора: [(id, человекочитаемая метка)].
+    id: 'nvidia' или 'cardN'. В метке — драйвер и текущая температура (чтобы
+    понять, где встройка, а где дискретка)."""
+    out = []
+    if shutil.which("nvidia-smi"):
+        out.append(("nvidia", "nvidia (nvidia-smi)"))
+    for card in sorted(glob.glob("/sys/class/drm/card[0-9]")):
+        cid = os.path.basename(card)
+        drv = "?"
+        try:
+            for line in open(os.path.join(card, "device", "uevent")):
+                if line.startswith("DRIVER="):
+                    drv = line.split("=", 1)[1].strip()
+                    break
+        except OSError:
+            pass
+        temp = None
+        for t in glob.glob(os.path.join(card, "device", "hwmon", "hwmon*",
+                                        "temp1_input")):
+            try:
+                temp = round(int(open(t).read().strip()) / 1000)
+                break
+            except Exception:
+                pass
+        label = "%s (%s)%s" % (cid, drv,
+                               "" if temp is None else "  %d°C now" % temp)
+        out.append((cid, label))
+    return out
 
 
 def _amd_temp(card):

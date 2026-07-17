@@ -9,6 +9,7 @@ import sys
 
 from . import config as cfgmod
 from . import device
+from .sensors import list_gpus
 
 SERVICE = "zalman-display.service"
 USER_UNIT_DIR = os.path.expanduser("~/.config/systemd/user")
@@ -63,9 +64,28 @@ def set_position(p):
     cfgmod.update(position=p); print("Stats position:", p)
 
 
+def print_gpus():
+    print("Available GPUs (use the id with --gpu):")
+    print("  auto      pick automatically (default)")
+    for gid, label in list_gpus():
+        print("  %-9s %s" % (gid, label))
+
+
+def set_gpu(v):
+    if v == "list":
+        print_gpus(); return
+    ids = ["auto"] + [g[0] for g in list_gpus()]
+    if v in ids:
+        cfgmod.update(gpu=v); print("GPU:", v)
+    else:
+        print("Unknown GPU '%s'." % v); print_gpus()
+
+
 # ------------------------------ commands ------------------------------
 def cmd_detect():
     print("Device 0483:5740:", "FOUND" if device.available() else "NOT found")
+    print()
+    print_gpus()
 
 
 def cmd_run(argv):
@@ -95,6 +115,8 @@ def apply_flags(argv):
     ap.add_argument("--stats-bg", dest="stats_bg",
                     choices=("off", "white", "black"),
                     help="semi-transparent strip behind the text (30%% alpha)")
+    ap.add_argument("--gpu", metavar="auto|nvidia|cardN|list",
+                    help="which GPU to monitor; 'list' shows the options")
     a = ap.parse_args(argv)
     did = False
     if a.image is not None:
@@ -113,6 +135,8 @@ def apply_flags(argv):
     if a.stats_bg is not None:
         cfgmod.update(stats_bg=a.stats_bg); did = True
         print("Stats background:", a.stats_bg)
+    if a.gpu is not None:
+        set_gpu(a.gpu); did = True
     if not did:
         ap.print_help()
         print("\nService: zalman-display service install|start|stop|restart|status"
