@@ -94,6 +94,26 @@ zalman-display service start|stop|restart|status|uninstall
 
 ## Troubleshooting
 
+**`zsh: command not found: zalman-display` after install.** `~/.local/bin`
+(where pipx puts the command) isn't on your `PATH`. `pipx ensurepath` can be a
+no-op here: it checks the `PATH` of the shell *it* runs in, and if that shell
+already inherited `~/.local/bin` (e.g. from a login profile) it decides there is
+nothing to do and writes **nothing** to your rc file — so your interactive shell
+still can't find the command. Fix it explicitly:
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
+source ~/.zshrc                                            # reload current shell
+zalman-display detect
+```
+
+Opening a new terminal also works once the line is in your rc file. Note that
+the source repo is **not** needed at runtime: `pipx install .` copies the
+package (incl. the bundled font) into its own venv, and `service install`
+generates the systemd unit and udev rule from strings in the code — so after a
+successful install you can delete the cloned directory. To update later,
+re-clone and run `pipx install --force .`.
+
 **The screen freezes / stops updating.** The device has a strict hardware JPEG
 decoder that **hangs on any non-standard marker**. The classic trigger is a
 `COM` (comment) marker: image libraries copy the source file's metadata (GIFs
