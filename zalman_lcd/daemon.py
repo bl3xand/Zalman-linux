@@ -23,25 +23,37 @@ _ROT = {0: None, 90: Image.ROTATE_90, 180: Image.ROTATE_180,
 KEEPALIVE = 3.0
 MAX_FRAMES = 200
 STATS_INTERVAL = 1.0        # обновлять статы раз в ~секунду (как Windows)
+STALL_ESCALATE = 12         # столько кадров подряд застряло -> reconnect+usb_reset
 
 
-def _jpeg(img, quality=82):
+MAX_JPEG = 14000            # держим кадр в диапазоне Windows (~6..15КБ)
+
+
+def _jpeg(img, quality=82, max_bytes=MAX_JPEG):
     """Кодирование кадра фона в JPEG, БАЙТ-СТРУКТУРНО как у Windows-приложения.
 
     Критично: пересобираем картинку через Image.new+paste, чтобы .info было
     ПУСТЫМ. Иначе PIL тащит метаданные исходника (у GIF в info есть 'comment')
     и вставляет в JPEG маркер 0xFE (COM). Аппаратный JPEG-декодер дисплея на
-    неожиданном COM-маркере ЗАВИСАЕТ и перестаёт забирать данные с шины —
-    ровно то «намертво зависает». Windows такой маркер никогда не шлёт.
-    Также принудительно baseline + 4:2:0, без progressive/optimize/EXIF.
-    """
+    неожиданном COM-маркере ЗАВИСАЕТ и перестаёт забирать данные с шины.
+    Windows такой маркер никогда не шлёт. Также принудительно baseline + 4:2:0,
+    без progressive/optimize/EXIF.
+
+    Плюс держим РАЗМЕР кадра в диапазоне Windows (~10КБ): слишком большой JPEG
+    дольше декодируется железным декодером и повышает шанс висяка. Снижаем
+    quality, пока кадр не влезет в max_bytes (пол — 40)."""
     rgb = img.convert("RGB")
     clean = Image.new("RGB", rgb.size)
     clean.paste(rgb)
-    b = io.BytesIO()
-    clean.save(b, "JPEG", quality=quality, subsampling="4:2:0",
-               progressive=False, optimize=False)
-    return b.getvalue()
+    q = quality
+    while True:
+        b = io.BytesIO()
+        clean.save(b, "JPEG", quality=q, subsampling="4:2:0",
+                   progressive=False, optimize=False)
+        data = b.getvalue()
+        if len(data) <= max_bytes or q <= 40:
+            return data
+        q -= 8
 
 
 class Daemon:
@@ -218,42 +230,59 @@ class Daemon:
             last_ov = 0.0
             hb_t = sess_t0
             hb_frames = 0
+            consec = 0          # подряд застрявших кадров
+            stalls_total = 0
             dbg.log("session begin: animated=%s fps=%s stats=%s bg_frames=%s "
                     "rss=%.0fMB" % (self._animated, self._fps, self.stats.show,
                                     (len(self._jpegs) if self._jpegs else "vid"),
                                     dbg.rss_mb()))
             while self.running:
                 self._reload_if_changed()
-                self._apply_brightness(dev)
                 now = time.time()
-                # Любой DeviceError = устройство перестало забирать данные
-                # (залипло). Продолжать слать в залипший fd бесполезно —
-                # пробрасываем наверх, run() сделает usb_reset + переподключение.
-                if self._animated:
-                    te = time.time()
-                    frame = self._next_bg()
-                    enc = time.time() - te
-                    if enc >= 0.15:
-                        dbg.log("SLOW-ENCODE %.3fs size=%d" % (enc, len(frame)))
-                    dev.send_jpeg(frame)
-                    frames += 1
-                    hb_frames += 1
-                elif self._bg_dirty or now - last_bg >= KEEPALIVE:
-                    dev.send_jpeg(self._next_bg())
-                    self._bg_dirty = False
-                    last_bg = now
-                    frames += 1
-                    hb_frames += 1
-                # статы — раз в ~секунду (как Windows), оверлей держится сам
-                if self.stats.show and now - last_ov >= STATS_INTERVAL:
-                    dev.send_overlay(self._overlay_u32())
-                    last_ov = now
-                    ov_count += 1
+                # Застрявший кадр НЕ рвём соединение (close добивает декодер в
+                # жёсткий висяк). Как Windows: flush TX и продолжаем на том же
+                # дескрипторе, пропустив кадр. Только после MANY подряд —
+                # эскалация (наверх -> usb_reset + переподключение).
+                try:
+                    self._apply_brightness(dev)
+                    if self._animated:
+                        te = time.time()
+                        frame = self._next_bg()
+                        enc = time.time() - te
+                        if enc >= 0.15:
+                            dbg.log("SLOW-ENCODE %.3fs size=%d" % (enc, len(frame)))
+                        dev.send_jpeg(frame)
+                        frames += 1
+                        hb_frames += 1
+                    elif self._bg_dirty or now - last_bg >= KEEPALIVE:
+                        dev.send_jpeg(self._next_bg())
+                        self._bg_dirty = False
+                        last_bg = now
+                        frames += 1
+                        hb_frames += 1
+                    # статы — раз в ~секунду (как Windows), оверлей держится сам
+                    if self.stats.show and now - last_ov >= STATS_INTERVAL:
+                        dev.send_overlay(self._overlay_u32())
+                        last_ov = now
+                        ov_count += 1
+                    consec = 0
+                except device.DeviceError as e:
+                    consec += 1
+                    stalls_total += 1
+                    dbg.log("frame-stall #%d (total %d) at frame=%d: %s "
+                            "-> flush+continue" % (consec, stalls_total, frames, e))
+                    dev.flush_tx()
+                    if consec >= STALL_ESCALATE:
+                        dbg.log("%d подряд застрявших кадров -> эскалация "
+                                "(reconnect+reset)" % consec)
+                        raise
+                    self._sleep(0.05)
+                    continue
                 # пульс раз в 5с: кадры, fps, память — видно деградацию
                 if now - hb_t >= 5.0:
-                    dbg.log("hb frames=%d ov=%d fps=%.1f rss=%.0fMB | %s"
+                    dbg.log("hb frames=%d ov=%d fps=%.1f stalls=%d rss=%.0fMB | %s"
                             % (frames, ov_count, hb_frames / (now - hb_t),
-                               dbg.rss_mb(), dbg.usb_state()))
+                               stalls_total, dbg.rss_mb(), dbg.usb_state()))
                     hb_t = now
                     hb_frames = 0
                 self._sleep((1.0 / max(1, self._fps)) if self._animated else 0.25)
