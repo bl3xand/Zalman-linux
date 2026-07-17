@@ -73,33 +73,29 @@ def _lines(sensors):
     return ["%s %s" % (cpu, gpu), ram]      # CPU+GPU на одной строке, RAM на второй
 
 
-_MAX_SIZE = 28
+_MAX_SIZE = 26
 
 
-def _sizes(sensors):
-    """(размер строки CPU/GPU, размер строки RAM). Кегль считается по «худшему»
-    тексту с 3 цифрами (100% 999°) и кэшируется -> текст НИКОГДА не сжимается
-    от смены значений. CPU/GPU растянуты под ширину (крупнее), RAM чуть меньше."""
-    if _sizes._cache:
-        return _sizes._cache
+def _size(sensors):
+    """Единый кегль для всех строк: наибольший, при котором «худшие» строки
+    (3 цифры: 100% 999°) влезают по ширине. Считается по максимуму цифр и
+    кэшируется -> текст НИКОГДА не сжимается от смены значений. Все строки
+    одного размера (CPU/GPU не крупнее RAM)."""
+    if _size._cache:
+        return _size._cache
     _, total = sensors.ram_gb()
-    top_t = "CPU 100% 999° GPU 100% 999°"       # худший случай: 3 цифры
-    ram_t = "RAM %.1f / %.1f GB" % (total or 999.9, total or 999.9)
+    tmpl = ["CPU 100% 999° GPU 100% 999°",      # худший случай: 3 цифры
+            "RAM %.1f / %.1f GB" % (total or 999.9, total or 999.9)]
     probe = ImageDraw.Draw(Image.new("RGBA", (2, 2)))
-
-    def fit(s):
-        sz = _MAX_SIZE
-        while sz > 10 and probe.textlength(s, font=_font(sz)) > SCREEN[0] - 6:
-            sz -= 1
-        return sz
-
-    top = fit(top_t)
-    ram = min(fit(ram_t), top - 1)              # RAM чуть меньше CPU/GPU
-    _sizes._cache = (top, ram)
-    return _sizes._cache
+    sz = _MAX_SIZE
+    while sz > 10 and max(probe.textlength(t, font=_font(sz))
+                          for t in tmpl) > SCREEN[0] - 6:
+        sz -= 1
+    _size._cache = sz
+    return sz
 
 
-_sizes._cache = None
+_size._cache = 0
 
 
 class StatsBar:
@@ -117,11 +113,10 @@ class StatsBar:
         """RGBA-оверлей: прозрачный фон + строки параметров.
         Строка CPU/GPU — крупнее, RAM — чуть меньше; межстрочный минимальный."""
         lines = _lines(self.sensors)
-        top_sz, ram_sz = _sizes(self.sensors)
-        fonts = [_font(top_sz)] + [_font(ram_sz)] * (len(lines) - 1)
-        heights = [sum(fn.getmetrics()) for fn in fonts]
+        fn = _font(_size(self.sensors))         # единый размер для всех строк
+        lh = sum(fn.getmetrics())
         pad, gap = 3, 1                 # минимальный межстрочный
-        barh = pad * 2 + sum(heights) + gap * (len(lines) - 1)
+        barh = pad * 2 + lh * len(lines) + gap * (len(lines) - 1)
         y0 = 0 if self.position == "up" else SCREEN[1] - barh
         img = Image.new("RGBA", SCREEN, (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
@@ -129,14 +124,14 @@ class StatsBar:
             col = (255, 255, 255) if self.bg == "white" else (0, 0, 0)
             d.rectangle([0, y0, SCREEN[0], y0 + barh], fill=col + (77,))
         y = y0 + pad
-        for t, fn, h in zip(lines, fonts, heights):
+        for t in lines:
             w = d.textlength(t, font=fn)
             x = (SCREEN[0] - w) // 2
             for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2),      # обводка
                            (-2, -2), (2, 2), (-2, 2), (2, -2)):
                 d.text((x + dx, y + dy), t, font=fn, fill=(0, 0, 0, 230))
             d.text((x, y), t, font=fn, fill=self.color + (255,))
-            y += h + gap
+            y += lh + gap
         return img
 
 

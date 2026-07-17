@@ -139,7 +139,7 @@ class Sensors:
             d = self._nvidia()
             return d["temp"] if d else None
         if self._gpu:
-            return _amd_temp(self._gpu)
+            return _drm_temp(self._gpu)
         return None
 
     def gpu_clock(self):
@@ -147,7 +147,7 @@ class Sensors:
             d = self._nvidia()
             return d["clock"] if d else None
         if self._gpu:
-            return _amd_clock(self._gpu)
+            return _drm_clock(self._gpu)
         return None
 
     def gpu_load(self):
@@ -268,7 +268,7 @@ def list_gpus():
     return out
 
 
-def _amd_temp(card):
+def _drm_temp(card):
     for t in glob.glob(os.path.join(card, "device", "hwmon", "hwmon*",
                                     "temp1_input")):
         try:
@@ -278,7 +278,7 @@ def _amd_temp(card):
     return None
 
 
-def _amd_clock(card):
+def _drm_clock(card):
     p = os.path.join(card, "device", "pp_dpm_sclk")
     try:
         for line in open(p):
