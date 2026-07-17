@@ -7,6 +7,7 @@
 
 import glob
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -217,36 +218,73 @@ def _detect_gpu(prefer="auto"):
     return None
 
 
-def _pci_name(card):
-    """Человекочитаемое имя видеокарты через lspci (например
-    'Radeon RX 9070/9070 XT/9070 GRE'). None, если не вышло."""
+def _card_pci(card):
+    """PCI-адрес карты, напр. '0000:03:00.0'."""
     try:
-        addr = os.path.basename(os.path.realpath(os.path.join(card, "device")))
+        return os.path.basename(os.path.realpath(os.path.join(card, "device")))
+    except OSError:
+        return None
+
+
+def _vulkan_names():
+    """{pci_addr: чистое имя} из vulkaninfo — как в GNOME/Mission Center
+    ('AMD Radeon RX 9070 XT'). Пусто, если vulkaninfo нет. Универсально
+    (AMD/Intel/NVIDIA)."""
+    if not shutil.which("vulkaninfo"):
+        return {}
+    try:
+        out = subprocess.check_output(["vulkaninfo"], stderr=subprocess.DEVNULL,
+                                      timeout=6).decode(errors="replace")
+    except Exception:
+        return {}
+    res, name, pci = {}, None, {}
+    for line in out.splitlines():
+        s = line.strip()
+        if s.startswith("deviceName"):
+            name = re.sub(r"\s*\(.*\)\s*$", "", s.split("=", 1)[1].strip())
+            pci = {}
+        elif "=" in s and s.split("=")[0].strip() in (
+                "pciDomain", "pciBus", "pciDevice", "pciFunction"):
+            try:
+                pci[s.split("=")[0].strip()] = int(s.split("=")[1])
+            except ValueError:
+                pass
+            if len(pci) == 4 and name:
+                addr = "%04x:%02x:%02x.%x" % (pci["pciDomain"], pci["pciBus"],
+                                              pci["pciDevice"], pci["pciFunction"])
+                res.setdefault(addr, name)
+    return res
+
+
+def _lspci_name(addr):
+    """Имя из lspci (fallback), напр. 'Radeon RX 9070/9070 XT/9070 GRE'."""
+    if not addr or not shutil.which("lspci"):
+        return None
+    try:
         out = subprocess.check_output(["lspci", "-s", addr],
                                       stderr=subprocess.DEVNULL,
                                       timeout=2).decode(errors="replace")
-        line = out.strip().splitlines()[0]
-        desc = line.split("controller:", 1)[-1].split(":", 1)[-1].strip()
-        import re
+        desc = out.strip().splitlines()[0].split("controller:", 1)[-1]
+        desc = desc.split(":", 1)[-1].strip()
         br = re.findall(r"\[([^\]]+)\]", desc)     # маркетинговое имя в скобках
         name = br[-1] if br else desc
-        name = re.sub(r"\s*\(rev [0-9a-f]+\)\s*$", "", name).strip()
-        return name or None
+        return re.sub(r"\s*\(rev [0-9a-f]+\)\s*$", "", name).strip() or None
     except Exception:
         return None
 
 
 def list_gpus():
     """Список доступных GPU для выбора: [(id, человекочитаемая метка)].
-    id: 'nvidia' или 'cardN'. В метке — модель (lspci) и текущая температура —
-    чтобы отличить встройку от дискретки."""
+    id: 'nvidia' или 'cardN'. Имя берём как в системе: vulkaninfo (то же, что
+    показывает GNOME/Mission Center) -> lspci -> драйвер. + текущая температура."""
     out = []
     if shutil.which("nvidia-smi"):
         out.append(("nvidia", "NVIDIA (nvidia-smi)"))
-    have_lspci = bool(shutil.which("lspci"))
+    vk = _vulkan_names()
     for card in sorted(glob.glob("/sys/class/drm/card[0-9]")):
         cid = os.path.basename(card)
-        name = (_pci_name(card) if have_lspci else None)
+        addr = _card_pci(card)
+        name = vk.get(addr) or _lspci_name(addr)
         if not name:
             try:
                 for line in open(os.path.join(card, "device", "uevent")):
