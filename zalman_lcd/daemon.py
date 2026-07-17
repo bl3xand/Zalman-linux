@@ -23,6 +23,7 @@ _ROT = {0: None, 90: Image.ROTATE_90, 180: Image.ROTATE_180,
 KEEPALIVE = 3.0
 MAX_FRAMES = 200
 STATS_INTERVAL = 1.0        # обновлять статы раз в ~секунду (как Windows)
+PRESENT_INTERVAL = 1.0      # команда 0x00 (commit/flush) раз в секунду (как Windows)
 STALL_ESCALATE = 12         # столько кадров подряд застряло -> reconnect+usb_reset
 
 
@@ -228,6 +229,7 @@ class Daemon:
             self._last_brightness = None
             last_bg = 0.0
             last_ov = 0.0
+            last_present = 0.0
             hb_t = sess_t0
             hb_frames = 0
             consec = 0          # подряд застрявших кадров
@@ -265,6 +267,11 @@ class Daemon:
                         dev.send_overlay(self._overlay_u32())
                         last_ov = now
                         ov_count += 1
+                    # commit/flush конвейера раз в секунду (как Windows) —
+                    # иначе декодер накапливает состояние и жёстко виснет
+                    if now - last_present >= PRESENT_INTERVAL:
+                        dev.present()
+                        last_present = now
                     consec = 0
                 except device.DeviceError as e:
                     consec += 1

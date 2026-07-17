@@ -242,6 +242,14 @@ class Display:
         self._bulk(b"\x00", tag="ov-term")
         self._bulk(b"\x00" * 16, tag="ov-tail")
 
+    def present(self):
+        """Команда 0x00 (16 нулевых байт, len=0) — «commit/flush» конвейера
+        дисплея. Windows шлёт её РАЗ В СЕКУНДУ внутрь потока 0x05 (в дампе 56
+        штук за 38с, интервал ~1.02с). Без неё в декодере что-то накапливается
+        и через N кадров он ЖЁСТКО виснет (частота зависит от размера кадра —
+        большие копят быстрее). Одиночная 16-байтная передача, без терминатора."""
+        self._bulk(b"\x00" * 16, tag="present")
+
     def brightness(self, value, rotate=0xFF):
         v = 0xFF if value is None else (0xFF if value > 100
                                         else (value * 90) // 100 + 10)
