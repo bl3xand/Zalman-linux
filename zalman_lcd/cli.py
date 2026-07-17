@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""CLI для zalman-display: флаги для скриптов + интерактивное меню без аргументов."""
+"""CLI for zalman-display: flags for scripting + interactive menu (no args)."""
 
 import argparse
 import os
@@ -11,55 +11,63 @@ from . import device
 
 SERVICE = "zalman-display.service"
 USER_UNIT_DIR = os.path.expanduser("~/.config/systemd/user")
-UDEV_RULE = ('SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", '
-             'ATTRS{idProduct}=="5740", MODE="0666"\n')
+UDEV_RULE = ('SUBSYSTEM=="usb", ATTR{idVendor}=="0483", '
+             'ATTR{idProduct}=="5740", MODE="0666", TAG+="uaccess"')
 ROTATIONS = (0, 90, 180, 270)
 
 
-# ------------------------- применение настроек -------------------------
+# ------------------------- settings -------------------------
 def set_background(path):
     if path is None or str(path).lower() in ("none", "off", ""):
         cfgmod.clear_background_cache()
         cfgmod.update(background=None)
-        print("Фон убран (чёрный), кэш очищен.")
+        print("Background cleared (black).")
         return
     p = os.path.abspath(os.path.expanduser(path))
     if not os.path.isfile(p):
-        print("Файл не найден:", p)
+        print("File not found:", p)
         return
-    cached = cfgmod.cache_background(p)     # копия в кэш, старый удаляется
+    cached = cfgmod.cache_background(p)     # copy into cache, old one removed
     cfgmod.update(background=cached)
-    print("Фон:", os.path.basename(p), "(кэширован, старый удалён)")
+    print("Background set:", os.path.basename(p), "(cached, previous removed)")
+
+
+def rotate_step():
+    """Rotate by +90° (cycles 0 -> 90 -> 180 -> 270 -> 0)."""
+    cur = int(cfgmod.load().get("rotate", 0))
+    nxt = (cur + 90) % 360
+    cfgmod.update(rotate=nxt)
+    print("Rotation: %d°" % nxt)
 
 
 def set_rotate(v):
     if v not in ROTATIONS:
-        print("Поворот: 0/90/180/270"); return
-    cfgmod.update(rotate=v); print("Поворот:", v)
+        print("Rotation must be 0/90/180/270"); return
+    cfgmod.update(rotate=v); print("Rotation: %d°" % v)
 
 
 def set_brightness(v):
     if not 0 <= v <= 100:
-        print("Яркость: 0..100"); return
-    cfgmod.update(brightness=v); print("Яркость:", v)
+        print("Brightness must be 0..100"); return
+    cfgmod.update(brightness=v); print("Brightness:", v)
 
 
 def set_color(hexv):
     h = hexv.lstrip("#")
     if len(h) != 6 or any(c not in "0123456789abcdefABCDEF" for c in h):
-        print("Цвет: 6 hex-символов, напр. 00FFAA"); return
-    cfgmod.update(text_color=h.upper()); print("Цвет текста:", h.upper())
+        print("Color must be 6 hex digits, e.g. 00FFAA"); return
+    cfgmod.update(text_color=h.upper()); print("Text color:", h.upper())
 
 
 def set_position(p):
     if p not in ("up", "down"):
-        print("Положение: up / down"); return
-    cfgmod.update(position=p); print("Положение строки:", p)
+        print("Position must be up / down"); return
+    cfgmod.update(position=p); print("Stats position:", p)
 
 
-# ------------------------------ команды ------------------------------
+# ------------------------------ commands ------------------------------
 def cmd_detect():
-    print("Устройство 0483:5740:", "найдено" if device.available() else "НЕ найдено")
+    print("Device 0483:5740:", "FOUND" if device.available() else "NOT found")
 
 
 def cmd_run(argv):
@@ -71,17 +79,20 @@ def cmd_run(argv):
 
 
 def apply_flags(argv):
-    ap = argparse.ArgumentParser(prog="zalman-display", add_help=True,
-                                 description="Управление дисплеем Zalman Alpha 2")
+    ap = argparse.ArgumentParser(
+        prog="zalman-display",
+        description="Control the Zalman Alpha 2 LCD (run with no args for a menu)")
     ap.add_argument("--set", "--image", dest="image", metavar="PATH",
-                    help="фон: путь к картинке/видео/gif (или 'none')")
-    ap.add_argument("--rotate", type=int, choices=ROTATIONS)
+                    help="background: path to image/video/gif (or 'none')")
+    ap.add_argument("--rotate", type=int, choices=ROTATIONS,
+                    help="set rotation 0/90/180/270")
     ap.add_argument("--brightness", type=int, metavar="0-100")
     ap.add_argument("--text-color", dest="color", metavar="HEX")
     ap.add_argument("--position", choices=("up", "down"))
-    ap.add_argument("--stats", choices=("on", "off"))
+    ap.add_argument("--stats", choices=("on", "off"),
+                    help="show/hide the monitoring line")
     ap.add_argument("--strip", choices=("on", "off"),
-                    help="полупрозрачная подложка под текстом")
+                    help="semi-transparent strip behind the text")
     a = ap.parse_args(argv)
     did = False
     if a.image is not None:
@@ -96,20 +107,20 @@ def apply_flags(argv):
         set_position(a.position); did = True
     if a.stats is not None:
         cfgmod.update(show_stats=(a.stats == "on")); did = True
-        print("Строка параметров:", a.stats)
+        print("Stats line:", a.stats)
     if a.strip is not None:
         cfgmod.update(text_bg=(a.strip == "on")); did = True
-        print("Подложка:", a.strip)
+        print("Text strip:", a.strip)
     if not did:
         ap.print_help()
 
 
-# ------------------------------ сервис ------------------------------
+# ------------------------------ service ------------------------------
 def systemctl(*args):
     try:
         return subprocess.run(["systemctl", "--user", *args]).returncode
     except FileNotFoundError:
-        print("systemctl не найден"); return 1
+        print("systemctl not found"); return 1
 
 
 def service_status():
@@ -133,13 +144,12 @@ def install_service():
     open(os.path.join(USER_UNIT_DIR, SERVICE), "w").write(unit)
     systemctl("daemon-reload")
     systemctl("enable", "--now", SERVICE)
-    print("Сервис установлен и запущен (автозапуск включён).")
-    print("Совет: `loginctl enable-linger $USER` — работать без входа в сессию.")
-    if not os.access("/dev/bus/usb", os.R_OK) or True:
-        print("\nЕсли нет прав на USB — установи udev-правило (sudo):")
-        print("  echo '%s' | sudo tee /etc/udev/rules.d/99-zalman-lcd.rules"
-              % UDEV_RULE.strip())
-        print("  sudo udevadm control --reload && sudo udevadm trigger")
+    print("Service installed and started (autostart enabled).")
+    print("Tip: `loginctl enable-linger $USER` to run before you log in.")
+    print("\nNo USB access? Install the udev rule (needs sudo):")
+    print("  echo '%s' | sudo tee /etc/udev/rules.d/99-zalman-lcd.rules"
+          % UDEV_RULE)
+    print("  sudo udevadm control --reload && sudo udevadm trigger")
 
 
 def cmd_service(argv):
@@ -151,76 +161,74 @@ def cmd_service(argv):
         p = os.path.join(USER_UNIT_DIR, SERVICE)
         if os.path.isfile(p):
             os.remove(p)
-        print("Сервис удалён.")
+        print("Service removed.")
     elif action in ("start", "stop", "restart", "status"):
         systemctl(action, SERVICE)
 
 
-# --------------------------- интерактив ---------------------------
+# --------------------------- interactive menu ---------------------------
 def _ask(prompt):
     try:
         return input(prompt).strip()
     except (EOFError, KeyboardInterrupt):
-        return ""
+        return "0"
 
 
 def menu():
     while True:
         c = cfgmod.load()
         print("\n=== Zalman Display ===")
-        print(" устройство: %s | сервис: %s"
-              % ("найдено" if device.available() else "НЕ найдено",
+        print(" device: %s | service: %s"
+              % ("found" if device.available() else "NOT found",
                  service_status()))
-        print(" фон=%s  яркость=%d  поворот=%d  цвет=%s  строка=%s(%s)"
-              % (c["background"] or "нет", c["brightness"], c["rotate"],
-                 c["text_color"], "вкл" if c["show_stats"] else "выкл",
-                 c["position"]))
-        print("""  1) Задать фон (картинка/видео/gif)
-  2) Убрать фон (чёрный)
-  3) Яркость (0-100)
-  4) Поворот (0/90/180/270)
-  5) Цвет текста (HEX)
-  6) Положение строки (вверх/вниз)
-  7) Строка параметров вкл/выкл
-  8) Подложка под текстом вкл/выкл
-  9) Сервис: 1старт 2стоп 3перезапуск 4статус
- 10) Установить автозапуск сервиса
-  0) Выход""")
-        ch = _ask("Выбор: ")
-        if ch == "0" or ch == "":
+        print(" background=%s  brightness=%d  rotation=%d°  color=%s  stats=%s(%s)"
+              % (os.path.basename(c["background"]) if c["background"] else "none",
+                 c["brightness"], c["rotate"], c["text_color"],
+                 "on" if c["show_stats"] else "off", c["position"]))
+        print("""  1) Set background (image / gif / video)
+  2) Clear background (black)
+  3) Brightness (0-100)
+  4) Rotate 90°
+  5) Text color (HEX)
+  6) Stats position (top/bottom)
+  7) Stats line on/off
+  8) Text strip on/off
+  9) Service: 1 start / 2 stop / 3 restart / 4 status
+ 10) Install autostart service
+  0) Exit""")
+        ch = _ask("Choice: ")
+        if ch in ("0", ""):
             break
         elif ch == "1":
-            set_background(_ask("Путь к файлу: "))
+            set_background(_ask("Path to file: "))
         elif ch == "2":
             set_background(None)
         elif ch == "3":
-            v = _ask("Яркость 0-100: ")
+            v = _ask("Brightness 0-100: ")
             if v.isdigit():
                 set_brightness(int(v))
         elif ch == "4":
-            v = _ask("Поворот 0/90/180/270: ")
-            if v.isdigit():
-                set_rotate(int(v))
+            rotate_step()
         elif ch == "5":
-            set_color(_ask("Цвет HEX (напр. 00FFAA): "))
+            set_color(_ask("Color HEX (e.g. 00FFAA): "))
         elif ch == "6":
-            v = _ask("Положение [1] вверх / [2] вниз: ")
+            v = _ask("Position [1] top / [2] bottom: ")
             set_position("up" if v == "1" else "down")
         elif ch == "7":
             cur = cfgmod.load()["show_stats"]
             cfgmod.update(show_stats=not cur)
-            print("Строка параметров:", "выкл" if cur else "вкл")
+            print("Stats line:", "off" if cur else "on")
         elif ch == "8":
             cur = cfgmod.load()["text_bg"]
             cfgmod.update(text_bg=not cur)
-            print("Подложка:", "выкл" if cur else "вкл")
+            print("Text strip:", "off" if cur else "on")
         elif ch == "9":
-            s = _ask("  [1]старт [2]стоп [3]перезапуск [4]статус: ")
+            s = _ask("  [1] start [2] stop [3] restart [4] status: ")
             cmd_service({"1": ["start"], "2": ["stop"], "3": ["restart"],
                          "4": ["status"]}.get(s, ["status"]))
         elif ch == "10":
             install_service()
-    print("Готово.")
+    print("Done.")
 
 
 def main(argv=None):

@@ -78,6 +78,13 @@ class StatsBar:
         self.show = bool(cfg.get("show_stats", True))
         self.strip = bool(cfg.get("text_bg", False))
 
+    def render(self, base):
+        """Впечатать строку параметров прямо в RGB-кадр фона (вернуть RGB)."""
+        if not self.show:
+            return base
+        return Image.alpha_composite(base.convert("RGBA"),
+                                     self.image()).convert("RGB")
+
     def image(self):
         """RGBA-оверлей: прозрачный фон + 2 строки параметров."""
         lines = _lines(self.sensors)

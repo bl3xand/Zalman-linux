@@ -1,120 +1,187 @@
 # -*- coding: utf-8 -*-
-"""Драйвер дисплея Zalman Alpha 2 — «живой» режим (SetDisplayInfo, cmd 0x07).
+"""Драйвер дисплея Zalman Alpha 2. USB CDC "USB Display", 0483:5740.
 
-Протокол восстановлен реверсом LcdComm.dll + USB-дампом (см. PROTOCOL.md).
+Транспорт: штатный ядровый CDC-драйвер через /dev/ttyACM* (как у Windows).
+Ядро само управляет bulk-передачами и потоком — не оставляет endpoint в
+залипшем состоянии (в отличие от сырого libusb с таймаутами посреди кадра).
 
-Транспорт: libusb напрямую в bulk OUT ep 0x02 (в обход cdc_acm).
-Устройство: USB CDC "USB Display", VID 0x0483 / PID 0x5740.
-
-Кадр (три отдельные bulk-передачи):
-  1) 16 байт 0x00                       — очистка/синхронизация кадрового буфера
-  2) 16 байт заголовок:
-       [07, sub, 0, 0] + clen(u32 LE) + x(u16) y(u16) w(u16) h(u16)
-     sub чередует 0x03/0x04; x=y=0, w=h=320; clen — длина тела (с терминатором)
-  3) тело: RLE по пикселям BGRA + терминатор 0x00000000
-
-Пиксель = (A<<24)|(R<<16)|(G<<8)|B. A — АЛЬФА: 0xFF непрозрачный, 0x00 прозрачный
-(устройство альфа-накладывает кадр на фон-тему). RLE-токены:
-  RUN     0x02000000|count  + 1 пиксель (повторить count раз)
-  LITERAL 0x01000000|count  + count пикселей
+Кадр фона: cmd 0x05 (JPEG). Строка параметров: cmd 0x07 (RLE + альфа).
+Пиксель = (A<<24)|(R<<16)|(G<<8)|B, A — альфа (0xFF непрозрачный, 0x00 сквозь).
+Пробуждение экрана — verify-хэндшейк (HWCX-TECH-VRFY0/1 + challenge).
 """
 
-import ctypes as C
+import fcntl
 import glob
 import os
 import random
+import select
 import struct
+import termios
 import time
+import tty as _tty
 
 import numpy as np
 
-VID, PID = 0x0483, 0x5740
-EP_OUT = 0x02
-EP_IN = 0x82
-IFACE = 1
+VID_S, PID_S = "0483", "5740"
 W = H = 320
 N = W * H
-
 CMD_ROTATE = 0x08
+TIOCM_DTR = 0x002
+TIOCM_RTS = 0x004
 
 
 class DeviceError(Exception):
     pass
 
 
-# ---------------------------------------------------------------------------
-# libusb через ctypes (без сторонних пакетов)
-# ---------------------------------------------------------------------------
-def _load_libusb():
-    for name in ("libusb-1.0.so.0", "libusb-1.0.so", "libusb.so"):
-        try:
-            return C.CDLL(name)
-        except OSError:
-            continue
-    raise DeviceError("libusb-1.0 не найдена (установите libusb)")
+def _ids(tty_name):
+    dev = os.path.realpath("/sys/class/tty/%s/device" % tty_name)
+    for _ in range(6):
+        vf, pf = os.path.join(dev, "idVendor"), os.path.join(dev, "idProduct")
+        if os.path.isfile(vf) and os.path.isfile(pf):
+            try:
+                return (open(vf).read().strip(), open(pf).read().strip())
+            except OSError:
+                return None
+        parent = os.path.dirname(dev)
+        if parent == dev:
+            break
+        dev = parent
+    return None
 
 
-_lib = None
+def find_tty():
+    for p in sorted(glob.glob("/dev/ttyACM*")):
+        if _ids(os.path.basename(p)) == (VID_S, PID_S):
+            return p
+    cands = sorted(glob.glob("/dev/ttyACM*"))
+    return cands[0] if len(cands) == 1 else None
 
 
-def _lib_init():
-    global _lib
-    if _lib is not None:
-        return _lib
-    lib = _load_libusb()
-    lib.libusb_open_device_with_vid_pid.restype = C.c_void_p
-    lib.libusb_open_device_with_vid_pid.argtypes = [C.c_void_p, C.c_uint16,
-                                                    C.c_uint16]
-    lib.libusb_bulk_transfer.argtypes = [C.c_void_p, C.c_ubyte, C.c_void_p,
-                                         C.c_int, C.POINTER(C.c_int), C.c_uint]
-    _lib = lib
-    return lib
-
-
-def available():
-    """Есть ли устройство на шине (по sysfs)."""
+def _usb_sysfs_dir():
+    """Каталог sysfs USB-устройства 0483:5740 (для сброса шины)."""
     for d in glob.glob("/sys/bus/usb/devices/*/idProduct"):
         base = os.path.dirname(d)
         try:
-            if (open(os.path.join(base, "idVendor")).read().strip() == "0483"
-                    and open(d).read().strip() == "5740"):
-                return True
+            if (open(os.path.join(base, "idVendor")).read().strip() == VID_S
+                    and open(d).read().strip() == PID_S):
+                return base
         except OSError:
             continue
-    return False
+    return None
+
+
+def available():
+    return _usb_sysfs_dir() is not None
+
+
+# ioctl USBDEVFS_RESET — перезагрузка устройства без физического отключения
+_USBDEVFS_RESET = (ord("U") << 8) | 20
+
+
+def usb_reset():
+    """Аппаратный сброс устройства через ядро (USBDEVFS_RESET).
+
+    Снимает «залипание» endpoint'а: устройство переустанавливается на шине и
+    заново перечисляется. Возвращает True при успехе. Не требует физического
+    отключения питания.
+    """
+    base = _usb_sysfs_dir()
+    if not base:
+        return False
+    try:
+        busnum = int(open(os.path.join(base, "busnum")).read())
+        devnum = int(open(os.path.join(base, "devnum")).read())
+    except OSError:
+        return False
+    path = "/dev/bus/usb/%03d/%03d" % (busnum, devnum)
+    try:
+        fd = os.open(path, os.O_WRONLY)
+    except OSError:
+        return False
+    try:
+        fcntl.ioctl(fd, _USBDEVFS_RESET, 0)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def wait_tty(timeout=6.0):
+    """Ждать появления /dev/ttyACM* после сброса/переподключения."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        p = find_tty()
+        if p:
+            return p
+        time.sleep(0.1)
+    return None
 
 
 class Display:
-    def __init__(self):
-        self.lib = _lib_init()
-        self.ctx = C.c_void_p()
-        if self.lib.libusb_init(C.byref(self.ctx)) != 0:
-            raise DeviceError("libusb_init fail")
-        h = self.lib.libusb_open_device_with_vid_pid(self.ctx, VID, PID)
-        if not h:
-            raise DeviceError(
-                "дисплей 0483:5740 не открылся (подключён? права на "
-                "/dev/bus/usb/*? см. udev-правило)")
-        self.h = C.c_void_p(h)
-        # авто-открепление ядрового драйвера (cdc_acm) + захват интерфейса
-        self.lib.libusb_set_auto_detach_kernel_driver(self.h, 1)
-        for i in (0, 1):
-            if self.lib.libusb_kernel_driver_active(self.h, i) == 1:
-                self.lib.libusb_detach_kernel_driver(self.h, i)
-        if self.lib.libusb_claim_interface(self.h, IFACE) != 0:
-            raise DeviceError("не удалось захватить интерфейс")
-        self._sub = 3
+    def __init__(self, path=None):
+        self.path = path or find_tty()
+        if not self.path:
+            raise DeviceError("дисплей 0483:5740 не найден (/dev/ttyACM*)")
+        self.fd = os.open(self.path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        try:
+            _tty.setraw(self.fd)
+            i, o, c, l, isp, osp, cc = termios.tcgetattr(self.fd)
+            c &= ~termios.PARENB
+            c &= ~termios.CSTOPB
+            c &= ~termios.CSIZE
+            c |= termios.CS8 | termios.CLOCAL | termios.CREAD
+            if hasattr(termios, "CRTSCTS"):
+                c &= ~termios.CRTSCTS
+            i &= ~(termios.IXON | termios.IXOFF | termios.IXANY)
+            o &= ~termios.OPOST
+            spd = getattr(termios, "B1000000", termios.B115200)
+            termios.tcsetattr(self.fd, termios.TCSANOW,
+                              [i, o, c, l, spd, spd, cc])
+            termios.tcflush(self.fd, termios.TCIOFLUSH)
+            fcntl.ioctl(self.fd, termios.TIOCMBIS,
+                        struct.pack("I", TIOCM_DTR | TIOCM_RTS))
+        except Exception:
+            os.close(self.fd)
+            raise
         self.wake()
 
-    def _read(self, length=64, timeout=300):
-        buf = (C.c_ubyte * length)()
-        n = C.c_int(0)
-        r = self.lib.libusb_bulk_transfer(self.h, EP_IN, buf, length,
-                                          C.byref(n), timeout)
-        return bytes(buf[:n.value]) if r == 0 else b""
+    # --- транспорт (ядровый CDC через tty) ---
+    def _bulk(self, data, timeout=2.5):
+        # Если устройство перестало забирать данные (залипание JPEG-декодера
+        # и т.п.), запись зависает -> ловим по таймауту и поднимаем DeviceError,
+        # демон делает usb_reset() и переподключается.
+        mv = memoryview(data)
+        total = 0
+        deadline = time.time() + timeout
+        while total < len(mv):
+            left = deadline - time.time()
+            if left <= 0:
+                raise DeviceError("write timeout")
+            _, w, _ = select.select([], [self.fd], [], left)
+            if not w:
+                raise DeviceError("write timeout")
+            try:
+                total += os.write(self.fd, mv[total:])
+            except BlockingIOError:
+                continue
+            except OSError as e:
+                raise DeviceError("write error: %s" % e)
+        return total
 
+    def _read(self, length=64, timeout=0.3):
+        r, _, _ = select.select([self.fd], [], [], timeout)
+        if not r:
+            return b""
+        try:
+            return os.read(self.fd, length)
+        except (BlockingIOError, OSError):
+            return b""
+
+    # --- протокол ---
     def wake(self):
-        """Verify-хэндшейк — будит экран после холодного старта (тёмный экран)."""
+        """Пробуждение экрана после холодного старта."""
         try:
             self._bulk(b"\x01HWCX-TECH-VRFY0"); self._read(); time.sleep(0.02)
             self._bulk(b"\x01HWCX-TECH-VRFY1"); self._read(); time.sleep(0.02)
@@ -129,58 +196,42 @@ class Display:
         except DeviceError:
             pass
 
-    def _bulk(self, data, timeout=5000):
-        # большой таймаут: НЕЛЬЗЯ прерывать передачу посреди кадра (иначе
-        # недосыл -> рассинхрон -> залипание endpoint -> нужен power cycle)
-        buf = (C.c_ubyte * len(data)).from_buffer_copy(data)
-        n = C.c_int(0)
-        r = self.lib.libusb_bulk_transfer(self.h, EP_OUT, buf, len(data),
-                                          C.byref(n), timeout)
-        if r != 0:
-            raise DeviceError("bulk_transfer error %d" % r)
-        return n.value
-
     def send_jpeg(self, jpg):
-        """Кадр ФОНА: JPEG через cmd 0x05 (сжато ~10КБ -> плавно).
-        header [05,00,00,00, len32, 0×8] + JPEG + добивка нулями до 64."""
+        """Кадр ФОНА (cmd 0x05): header + JPEG(добивка до 64) + байт 0x00."""
         pad = (-len(jpg)) % 64
         self._bulk(bytes([0x05, 0, 0, 0]) + struct.pack("<I", len(jpg))
                    + b"\x00" * 8)
         self._bulk(jpg + b"\x00" * pad)
+        self._bulk(b"\x00")
 
     def send_overlay(self, u32):
-        """Слой ОВЕРЛЕЯ: cmd 0x07 (RLE + альфа). Прозрачные пиксели (A=0)
-        пропускают фон, непрозрачные (A=0xFF) рисуются поверх. Держится и
-        композитится над кадрами фона."""
+        """Строка ОВЕРЛЕЯ (cmd 0x07, RLE+альфа): header + тело(добивка 64) +
+        0x00 + 16×0x00. Как в оригинальном DLL: тело всегда кратно 64 байтам."""
         body = _rle(u32) + b"\x00\x00\x00\x00"
-        self._send(body, 0x03)
-
-    # --- кадр ---
-    def _send(self, body, sub):
         clen = len(body)
-        header = bytes([0x07, sub, 0, 0]) + struct.pack("<I", clen) \
-            + struct.pack("<HHHH", 0, 0, W, H)
-        self._bulk(header)
-        off = 0
-        while off < clen:
-            self._bulk(body[off:off + 64])
-            off += 64
+        pad = (-clen) % 64
+        self._bulk(bytes([0x07, 0x03, 0, 0]) + struct.pack("<I", clen)
+                   + struct.pack("<HHHH", 0, 0, W, H))
+        self._bulk(body + b"\x00" * pad)
+        self._bulk(b"\x00")
+        self._bulk(b"\x00" * 16)
 
     def brightness(self, value, rotate=0xFF):
-        """Яркость 0..100 (0xFF = не менять); rotate 0..3 или 0xFF."""
         v = 0xFF if value is None else (0xFF if value > 100
                                         else (value * 90) // 100 + 10)
         self._bulk(bytes([CMD_ROTATE, rotate & 0xFF, v & 0xFF]) + b"\x00" * 13)
 
-    def set_rotate(self, rotate):
-        self._bulk(bytes([CMD_ROTATE, rotate & 0xFF, 0xFF]) + b"\x00" * 13)
-
     def close(self):
+        # ВАЖНО: сбросить буферы ДО close(). Если устройство залипло и не
+        # забирает вывод, os.close() уходит в tty_wait_until_sent и виснет
+        # намертво (ждёт слива буфера). tcflush отбрасывает несланное -> close
+        # мгновенный.
         try:
-            self.lib.libusb_release_interface(self.h, IFACE)
-            self.lib.libusb_attach_kernel_driver(self.h, IFACE)
-            self.lib.libusb_close(self.h)
-            self.lib.libusb_exit(self.ctx)
+            termios.tcflush(self.fd, termios.TCIOFLUSH)
+        except Exception:
+            pass
+        try:
+            os.close(self.fd)
         except Exception:
             pass
 
@@ -219,15 +270,9 @@ def _rle(a):
     return bytes(out)
 
 
-# ---------------------------------------------------------------------------
-# Изображение -> пиксельный буфер
-# ---------------------------------------------------------------------------
 def rgba_to_u32(img):
-    """PIL RGBA (или RGB) 320x320 -> numpy uint32[N] = (A<<24)|(R<<16)|(G<<8)|B.
-
-    RGB трактуется как полностью непрозрачный (A=0xFF)."""
     if img.mode != "RGBA":
         img = img.convert("RGBA")
-    a = np.asarray(img, dtype=np.uint32)          # HxWx4
+    a = np.asarray(img, dtype=np.uint32)
     R, G, B, A = a[:, :, 0], a[:, :, 1], a[:, :, 2], a[:, :, 3]
     return ((A << 24) | (R << 16) | (G << 8) | B).reshape(-1).astype(np.uint32)

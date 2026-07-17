@@ -1,63 +1,59 @@
 # zalman-display
 
-Драйвер и CLI-сервис для LCD-экрана СЖО **Zalman Alpha 2** под **Linux** —
-замена Windows-приложения «Zalman OZ». Показывает **картинку / GIF / видео** на
-весь экран + строку **системного мониторинга** (CPU/GPU/RAM) поверх, с
-регулировкой яркости и поворота. Работает как сервис с автозапуском.
+Driver and CLI service for the **Zalman Alpha 2** AIO **LCD** (320×320) on
+**Linux** — a replacement for the Windows-only «Zalman OZ». Shows an
+**image / GIF / video** fullscreen plus a **system-monitoring** line
+(CPU / GPU / RAM), with brightness and rotation control, and runs as an
+autostart service.
 
-Протокол получен реверс-инжинирингом — подробности в [PROTOCOL.md](PROTOCOL.md).
+Protocol reverse-engineered from scratch — see [PROTOCOL.md](PROTOCOL.md).
 
-- Экран: 320×320. Фон стримится как **JPEG** (сжато → плавно, ~20–30 к/с).
-- Строка параметров — прозрачный оверлей поверх фона, обновляется раз в секунду.
-- Общение с устройством напрямую через **libusb** (VID `0483:5740`).
+- Background is streamed as **JPEG** (compressed → smooth, ~20–30 fps).
+- Stats line is a transparent overlay on top, refreshed once per second.
 
-## Требования
+## Requirements
 
 ```bash
 # Arch
-sudo pacman -S python python-pillow python-numpy python-psutil libusb ffmpeg
-#   ffmpeg — только для видео; libusb — обязательно; остальное — Python-пакеты
+sudo pacman -S python python-pillow python-numpy python-psutil ffmpeg
+#   Pillow/numpy/psutil — Python deps; ffmpeg — video only (cdc_acm is in the kernel)
 ```
 
-- **libusb** — обязательно (общение с устройством).
-- **Pillow, numpy, psutil** — Python-зависимости.
-- **ffmpeg** — только если нужен фон-видео (mp4/mov/...). Для картинок/GIF не нужен.
-
-## Установка
+## Install
 
 ```bash
 git clone https://github.com/bl3xand/Zalman-linux
 cd Zalman-linux
-pip install --user .          # даст команду `zalman-display`
-# или запускать из исходников: python3 -m zalman_lcd <команда>
+pip install --user .          # provides the `zalman-display` command
+# or run from source: python3 -m zalman_lcd <command>
 ```
 
-Доступ к устройству без root (udev-правило):
+Device access without root (udev rule):
 
 ```bash
 sudo cp 99-zalman-lcd.rules /etc/udev/rules.d/
 sudo udevadm control --reload && sudo udevadm trigger
 ```
 
-## Быстрый старт
+## Quick start
 
 ```bash
-zalman-display                       # интерактивное меню (см. ниже)
-zalman-display detect                # найти устройство
-zalman-display --set ~/clip.gif      # задать фон (картинка/gif/видео)
-zalman-display --brightness 80       # яркость 0..100
-zalman-display --rotate 90           # поворот 0/90/180/270
-zalman-display --position up         # строка параметров вверху (или down)
-zalman-display --text-color 00FFAA   # цвет строки (HEX)
-zalman-display run                   # запустить показ (Ctrl+C — стоп)
+zalman-display                       # interactive menu (below)
+zalman-display detect                # find the device
+zalman-display --set ~/clip.gif      # background: image / gif / video
+zalman-display --brightness 80       # brightness 0..100
+zalman-display --rotate 90           # rotation 0/90/180/270
+zalman-display --position up         # stats line at top (or down)
+zalman-display --text-color 00FFAA   # stats color (HEX)
+zalman-display run                   # run the display (Ctrl+C to stop)
 ```
 
-Пока сервис/демон запущен, любая из команд выше применяется **на лету**
-(демон следит за конфигом).
+While the service/daemon is running, any command above applies **live** (the
+daemon watches the config file).
 
-## Интерактивное меню
+## Interactive menu
 
-Просто запусти без аргументов:
+Run with no arguments:
 
 ```bash
 zalman-display
@@ -65,60 +61,62 @@ zalman-display
 
 ```
 === Zalman Display ===
- устройство: найдено | сервис: active
- фон=…  яркость=80  поворот=0  цвет=FFFFFF  строка=вкл(down)
-  1) Задать фон (картинка/видео/gif)     ← спросит путь к файлу
-  2) Убрать фон (чёрный)
-  3) Яркость (0-100)
-  4) Поворот (0/90/180/270)
-  5) Цвет текста (HEX)
-  6) Положение строки (вверх/вниз)
-  7) Строка параметров вкл/выкл
-  8) Подложка под текстом вкл/выкл
-  9) Сервис: старт/стоп/перезапуск/статус
- 10) Установить автозапуск сервиса
-  0) Выход
+ device: found | service: active
+ background=…  brightness=80  rotation=0°  color=FFFFFF  stats=on(down)
+  1) Set background (image / gif / video)   ← asks for a file path
+  2) Clear background (black)
+  3) Brightness (0-100)
+  4) Rotate 90°                             ← each press turns +90°
+  5) Text color (HEX)
+  6) Stats position (top/bottom)
+  7) Stats line on/off
+  8) Text strip on/off
+  9) Service: start / stop / restart / status
+ 10) Install autostart service
+  0) Exit
 ```
 
-## Автозапуск (сервис при старте системы)
+## Autostart (service on boot)
 
 ```bash
-zalman-display service install       # создаёт и включает user-сервис
-# либо пункт 10 в меню
+zalman-display service install       # installs & enables the user service
+loginctl enable-linger $USER         # so it runs before you log in
 ```
 
-Это ставит systemd --user юнит и включает автозапуск. Управление:
+Manage it: `zalman-display service start|stop|restart|status`.
 
-```bash
-zalman-display service start|stop|restart|status
-```
+## Notes
 
-Чтобы сервис работал **до входа в графическую сессию** (сразу после загрузки):
+- **Background is cached**: `--set` copies the file into
+  `~/.config/zalman-lcd/media/` (exactly one file — the previous is deleted),
+  so the original can be moved or removed.
+- Config: `~/.config/zalman-lcd/config.json`.
+- GPU metrics come from `nvidia-smi` (NVIDIA) or sysfs `/sys/class/drm` (AMD);
+  shown as `--` if unavailable.
+- The separate USB device `0145:2001` is the pump/fan/RGB controller (HID); it
+  is not handled here.
 
-```bash
-loginctl enable-linger $USER
-```
+## Troubleshooting
 
-## Как это выглядит
+**The screen freezes / stops updating.** The device has a strict hardware JPEG
+decoder that **hangs on any non-standard marker**. The classic trigger is a
+`COM` (comment) marker: image libraries copy the source file's metadata (GIFs
+almost always carry a comment) into every encoded frame, and the decoder locks
+up on it — it stops draining the USB pipe and the whole link wedges. This driver
+therefore re-encodes every frame as a **clean baseline JPEG** (no comment/EXIF,
+4:2:0), byte-structurally identical to what the Windows app sends. If you still
+see a freeze:
 
-Фон (картинка/GIF/видео) — на весь экран (вписывается с обрезкой), а снизу/сверху
-две строки белым:
+- The daemon **auto-recovers**: on a stall it performs a kernel-level USB reset
+  (`USBDEVFS_RESET`) and reconnects — no physical unplugging needed. For that to
+  work without root, install the udev rule below (it grants access to the USB
+  node, not just the tty).
+- If the display is **already stuck** from a previous session, a USB reset
+  re-establishes the control link but may not clear a hung decoder — in that
+  case **cut power once** (full PC shutdown, or unplug the cooler's USB header)
+  to reset the display MCU. A warm reboot keeps the USB bus powered and does
+  **not** clear it.
+- If a background looks pixelated, it is being cropped to 320×320; use a roughly
+  square source for best results.
 
-```
-CPU 54% 63°    GPU 41% 71°
-RAM 12.4 / 30.4 GB
-```
-
-## Заметки
-
-- **Фон кэшируется**: при `--set` файл копируется в `~/.config/zalman-lcd/media/`
-  (ровно 1 файл — старый удаляется), поэтому оригинал можно перемещать/удалять.
-- Конфиг: `~/.config/zalman-lcd/config.json`.
-- Источники GPU-метрик: `nvidia-smi` (NVIDIA) или sysfs `/sys/class/drm` (AMD);
-  если недоступно — показывается `--`.
-- Отдельное USB-устройство `0145:2001` — контроллер помпы/вентиляторов/RGB, этим
-  проектом не управляется.
-- Видео/GIF стримятся как JPEG (плавно). Фон не пишется во flash устройства —
-  показ живёт, пока запущен сервис (как и в оригинальном приложении).
-
-Лицензия — MIT.
+License: MIT.
