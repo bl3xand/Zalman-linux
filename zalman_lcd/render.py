@@ -70,33 +70,36 @@ def _lines(sensors):
     gpu = "GPU %s%% %s" % (gl if gl is not None else "--",
                           "--" if gt is None else "%d°" % gt)
     ram = "RAM %.1f / %.1f GB" % (used, total) if total else "RAM --"
-    return ["%s  %s" % (cpu, gpu), ram]     # CPU+GPU на одной строке, RAM на второй
+    return ["%s %s" % (cpu, gpu), ram]      # CPU+GPU на одной строке, RAM на второй
 
 
-_MAX_SIZE = 24
+_MAX_SIZE = 28
 
 
-def _fixed_size(sensors):
-    """Наибольший кегль (<= _MAX_SIZE), при котором «худшие» строки (макс. цифры)
-    влезают по ширине. Считается ОДИН РАЗ и кэшируется — поэтому текст НЕ
-    сжимается при 6°->10° и т.п."""
-    if _fixed_size._cache:
-        return _fixed_size._cache
+def _sizes(sensors):
+    """(размер строки CPU/GPU, размер строки RAM). Кегль считается по «худшему»
+    тексту с 3 цифрами (100% 999°) и кэшируется -> текст НИКОГДА не сжимается
+    от смены значений. CPU/GPU растянуты под ширину (крупнее), RAM чуть меньше."""
+    if _sizes._cache:
+        return _sizes._cache
     _, total = sensors.ram_gb()
-    tmpl = ["CPU 100% 100°  GPU 100% 100°",
-            "RAM %.1f / %.1f GB" % (total or 999.9, total or 999.9)]
+    top_t = "CPU 100% 999° GPU 100% 999°"       # худший случай: 3 цифры
+    ram_t = "RAM %.1f / %.1f GB" % (total or 999.9, total or 999.9)
     probe = ImageDraw.Draw(Image.new("RGBA", (2, 2)))
-    size = _MAX_SIZE
-    while size > 10:
-        f = _font(size)
-        if max(probe.textlength(t, font=f) for t in tmpl) <= SCREEN[0] - 8:
-            break
-        size -= 1
-    _fixed_size._cache = size
-    return size
+
+    def fit(s):
+        sz = _MAX_SIZE
+        while sz > 10 and probe.textlength(s, font=_font(sz)) > SCREEN[0] - 6:
+            sz -= 1
+        return sz
+
+    top = fit(top_t)
+    ram = min(fit(ram_t), top - 1)              # RAM чуть меньше CPU/GPU
+    _sizes._cache = (top, ram)
+    return _sizes._cache
 
 
-_fixed_size._cache = 0
+_sizes._cache = None
 
 
 class StatsBar:
@@ -111,30 +114,29 @@ class StatsBar:
         self.bg = cfg.get("stats_bg", "off")        # off / white / black
 
     def image(self):
-        """RGBA-оверлей: прозрачный фон + 2 строки параметров."""
+        """RGBA-оверлей: прозрачный фон + строки параметров.
+        Строка CPU/GPU — крупнее, RAM — чуть меньше; межстрочный минимальный."""
         lines = _lines(self.sensors)
+        top_sz, ram_sz = _sizes(self.sensors)
+        fonts = [_font(top_sz)] + [_font(ram_sz)] * (len(lines) - 1)
+        heights = [sum(fn.getmetrics()) for fn in fonts]
+        pad, gap = 3, 1                 # минимальный межстрочный
+        barh = pad * 2 + sum(heights) + gap * (len(lines) - 1)
+        y0 = 0 if self.position == "up" else SCREEN[1] - barh
         img = Image.new("RGBA", SCREEN, (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
-        f = _font(_fixed_size(self.sensors))    # постоянный размер
-        asc, desc = f.getmetrics()
-        lh = asc + desc                 # полная высота строки (без приплюснутости)
-        pad, gap = 5, 2                 # плотный межстрочный интервал
-        barh = pad * 2 + lh * len(lines) + gap * (len(lines) - 1)
-        y0 = 0 if self.position == "up" else SCREEN[1] - barh
-        # подложка под текстом (30% альфа) — off / white / black
-        if self.bg in ("white", "black"):
+        if self.bg in ("white", "black"):       # подложка 30% альфа
             col = (255, 255, 255) if self.bg == "white" else (0, 0, 0)
-            d.rectangle([0, y0, SCREEN[0], y0 + barh], fill=col + (77,))  # ~30%
+            d.rectangle([0, y0, SCREEN[0], y0 + barh], fill=col + (77,))
         y = y0 + pad
-        for t in lines:
-            w = d.textlength(t, font=f)
+        for t, fn, h in zip(lines, fonts, heights):
+            w = d.textlength(t, font=fn)
             x = (SCREEN[0] - w) // 2
-            # тонкая обводка для контраста на любом фоне
-            for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2),
+            for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2),      # обводка
                            (-2, -2), (2, 2), (-2, 2), (2, -2)):
-                d.text((x + dx, y + dy), t, font=f, fill=(0, 0, 0, 230))
-            d.text((x, y), t, font=f, fill=self.color + (255,))
-            y += lh + gap
+                d.text((x + dx, y + dy), t, font=fn, fill=(0, 0, 0, 230))
+            d.text((x, y), t, font=fn, fill=self.color + (255,))
+            y += h + gap
         return img
 
 

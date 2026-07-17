@@ -217,23 +217,44 @@ def _detect_gpu(prefer="auto"):
     return None
 
 
+def _pci_name(card):
+    """Человекочитаемое имя видеокарты через lspci (например
+    'Radeon RX 9070/9070 XT/9070 GRE'). None, если не вышло."""
+    try:
+        addr = os.path.basename(os.path.realpath(os.path.join(card, "device")))
+        out = subprocess.check_output(["lspci", "-s", addr],
+                                      stderr=subprocess.DEVNULL,
+                                      timeout=2).decode(errors="replace")
+        line = out.strip().splitlines()[0]
+        desc = line.split("controller:", 1)[-1].split(":", 1)[-1].strip()
+        import re
+        br = re.findall(r"\[([^\]]+)\]", desc)     # маркетинговое имя в скобках
+        name = br[-1] if br else desc
+        name = re.sub(r"\s*\(rev [0-9a-f]+\)\s*$", "", name).strip()
+        return name or None
+    except Exception:
+        return None
+
+
 def list_gpus():
     """Список доступных GPU для выбора: [(id, человекочитаемая метка)].
-    id: 'nvidia' или 'cardN'. В метке — драйвер и текущая температура (чтобы
-    понять, где встройка, а где дискретка)."""
+    id: 'nvidia' или 'cardN'. В метке — модель (lspci) и текущая температура —
+    чтобы отличить встройку от дискретки."""
     out = []
     if shutil.which("nvidia-smi"):
-        out.append(("nvidia", "nvidia (nvidia-smi)"))
+        out.append(("nvidia", "NVIDIA (nvidia-smi)"))
+    have_lspci = bool(shutil.which("lspci"))
     for card in sorted(glob.glob("/sys/class/drm/card[0-9]")):
         cid = os.path.basename(card)
-        drv = "?"
-        try:
-            for line in open(os.path.join(card, "device", "uevent")):
-                if line.startswith("DRIVER="):
-                    drv = line.split("=", 1)[1].strip()
-                    break
-        except OSError:
-            pass
+        name = (_pci_name(card) if have_lspci else None)
+        if not name:
+            try:
+                for line in open(os.path.join(card, "device", "uevent")):
+                    if line.startswith("DRIVER="):
+                        name = line.split("=", 1)[1].strip()
+                        break
+            except OSError:
+                name = "?"
         temp = None
         for t in glob.glob(os.path.join(card, "device", "hwmon", "hwmon*",
                                         "temp1_input")):
@@ -242,8 +263,7 @@ def list_gpus():
                 break
             except Exception:
                 pass
-        label = "%s (%s)%s" % (cid, drv,
-                               "" if temp is None else "  %d°C now" % temp)
+        label = "%s%s" % (name, "" if temp is None else "  (%d°C now)" % temp)
         out.append((cid, label))
     return out
 
