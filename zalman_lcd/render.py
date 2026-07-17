@@ -76,7 +76,7 @@ class StatsBar:
         self.color = hex_color(cfg.get("text_color", "FFFFFF"))
         self.position = cfg.get("position", "down")
         self.show = bool(cfg.get("show_stats", True))
-        self.strip = bool(cfg.get("text_bg", False))
+        self.bg = cfg.get("stats_bg", "off")        # off / white / black
 
     def image(self):
         """RGBA-оверлей: прозрачный фон + 2 строки параметров."""
@@ -95,16 +95,18 @@ class StatsBar:
         pad, gap = 6, 8
         barh = pad * 2 + lh * len(lines) + gap * (len(lines) - 1)
         y0 = 0 if self.position == "up" else SCREEN[1] - barh
-        if self.strip:
-            d.rectangle([0, y0, SCREEN[0], y0 + barh], fill=(0, 0, 0, 150))
+        # подложка под текстом (30% альфа) — off / white / black
+        if self.bg in ("white", "black"):
+            col = (255, 255, 255) if self.bg == "white" else (0, 0, 0)
+            d.rectangle([0, y0, SCREEN[0], y0 + barh], fill=col + (77,))  # ~30%
         y = y0 + pad
         for t in lines:
             w = d.textlength(t, font=f)
             x = (SCREEN[0] - w) // 2
-            if not self.strip:
-                for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2),
-                               (-2, -2), (2, 2), (-2, 2), (2, -2)):
-                    d.text((x + dx, y + dy), t, font=f, fill=(0, 0, 0, 230))
+            # тонкая обводка для контраста на любом фоне
+            for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2),
+                           (-2, -2), (2, 2), (-2, 2), (2, -2)):
+                d.text((x + dx, y + dy), t, font=f, fill=(0, 0, 0, 230))
             d.text((x, y), t, font=f, fill=self.color + (255,))
             y += lh + gap
         return img

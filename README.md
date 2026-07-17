@@ -52,6 +52,7 @@ zalman-display --brightness 70       # brightness 0..100
 zalman-display --text-color 00FFAA   # stats text color (HEX)
 zalman-display --position up         # stats text at top (or 'down')
 zalman-display --stats off           # hide / show the monitoring line
+zalman-display --stats-bg black      # strip behind the text: off / white / black (30% alpha)
 
 zalman-display detect                # is the device present?
 zalman-display log [-f]              # view (or follow) the diagnostic log

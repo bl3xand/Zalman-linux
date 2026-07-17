@@ -22,8 +22,7 @@ _ROT = {0: None, 90: Image.ROTATE_90, 180: Image.ROTATE_180,
         270: Image.ROTATE_270}
 MAX_FRAMES = 360            # флеш-буфер устройства ~6МБ -> ограничиваем набор
 MAX_UPLOAD_BYTES = 5_000_000  # суммарно кадров не больше ~5МБ (буфер ~6МБ)
-STATS_INTERVAL = 1.0        # обновлять статы раз в ~секунду (как Windows)
-PRESENT_INTERVAL = 1.0      # команда 0x00 (commit/flush) раз в секунду (как Windows)
+STATS_INTERVAL = 1.0        # раз в секунду: present(0x00) + оверлей (как Windows)
 STALL_ESCALATE = 12         # столько кадров подряд застряло -> reconnect+usb_reset
 HEARTBEAT = 30.0            # как часто писать строку пульса в лог
 
@@ -73,6 +72,7 @@ class Daemon:
         self._last_brightness = None
         self._ov_cache = None       # (текст, u32) кэш оверлея
         self._ov_key = None
+        self._blank = None          # прозрачный оверлей для стирания статов
 
     def log(self, *a):
         if self.verbose:
@@ -177,19 +177,27 @@ class Daemon:
             self._last_brightness = b
 
     def _overlay_u32(self):
-        """Оверлей строки; перекодируем только когда значения изменились."""
+        """Оверлей строки; перекодируем только когда значения изменились.
+        self._ov_key меняется ровно тогда, когда меняется картинка оверлея —
+        по нему демон шлёт оверлей лишь при реальном изменении (меньше мерцаний)."""
         from .render import _lines as fmt
         ts = time.time()
         lines = tuple(fmt(self.sensors))
         sd = time.time() - ts
         if sd >= 0.2:
             dbg.log("SLOW-SENSORS %.3fs" % sd)
-        key = (lines, self.cfg.get("rotate", 0),
-               self.cfg.get("text_color"), self.cfg.get("position"))
+        key = (lines, self.cfg.get("rotate", 0), self.cfg.get("text_color"),
+               self.cfg.get("position"), self.cfg.get("stats_bg"))
         if key != self._ov_key:
             self._ov_cache = to_u32(self._rot_img(self.stats.image()))
             self._ov_key = key
         return self._ov_cache
+
+    def _blank_u32(self):
+        """Полностью прозрачный оверлей — стирает текст статов на устройстве."""
+        if self._blank is None:
+            self._blank = to_u32(Image.new("RGBA", (320, 320), (0, 0, 0, 0)))
+        return self._blank
 
     def _upload(self, dev):
         """Залить фон в флеш устройства: 0x02(fps,count) -> count× 0x05 -> 0x06.
@@ -254,11 +262,12 @@ class Daemon:
             # само, непрерывного 0x05 нет, копить нечего -> не виснет.
             self._upload(dev)
             last_ov = 0.0
-            last_present = 0.0
             hb_t = sess_t0
             hb_frames = 0          # оверлеев за окно пульса
             consec = 0
             stalls_total = 0
+            ov_sent = object()     # ключ последнего РЕАЛЬНО отправленного оверлея
+            cleared = False        # прозрачный оверлей уже отправлен (статы off)
             dbg.log("session begin: fps=%s stats=%s frames=%d rss=%.0fMB"
                     % (self._fps, self.stats.show,
                        len(self._frames or []), dbg.rss_mb()))
@@ -268,21 +277,32 @@ class Daemon:
                 if self._need_upload:
                     self._apply_brightness(dev)
                     self._upload(dev)
+                    ov_sent = object()      # после заливки оверлей нужен заново
+                    cleared = False
                 now = time.time()
                 # На залипании НЕ рвём соединение (close добивает декодер).
                 # Как Windows: flush TX и продолжаем на том же дескрипторе.
                 try:
                     self._apply_brightness(dev)
-                    # статы — раз в ~секунду (как Windows), оверлей держится сам
-                    if self.stats.show and now - last_ov >= STATS_INTERVAL:
-                        dev.send_overlay(self._overlay_u32())
+                    # раз в секунду: present(0x00) + оверлей — в порядке Windows
+                    if now - last_ov >= STATS_INTERVAL:
+                        dev.present()                   # 0x00 сначала (как Windows)
+                        if self.stats.show:
+                            cleared = False
+                            # оверлей шлём ТОЛЬКО когда картинка изменилась
+                            # (иначе лишние полноэкранные перерисовки -> мерцание)
+                            u = self._overlay_u32()
+                            if self._ov_key != ov_sent:
+                                dev.send_overlay(u)
+                                ov_sent = self._ov_key
+                                ov_count += 1
+                                hb_frames += 1
+                        elif not cleared:
+                            # статы выключили -> один раз стираем текст
+                            dev.send_overlay(self._blank_u32())
+                            cleared = True
+                            ov_sent = object()
                         last_ov = now
-                        ov_count += 1
-                        hb_frames += 1
-                    # commit/flush раз в секунду (как Windows)
-                    if now - last_present >= PRESENT_INTERVAL:
-                        dev.present()
-                        last_present = now
                     consec = 0
                 except device.DeviceError as e:
                     consec += 1

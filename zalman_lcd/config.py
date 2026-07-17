@@ -22,7 +22,7 @@ DEFAULTS = {
     "show_stats": True,        # показывать строку параметров
     "text_color": "FFFFFF",    # цвет строки, HEX
     "position": "down",        # up / down
-    "text_bg": False,          # полупрозрачная подложка под текстом
+    "stats_bg": "off",         # подложка под текстом: off / white / black (альфа 30%)
 }
 
 

@@ -86,6 +86,9 @@ def apply_flags(argv):
                     help="where the stats text goes")
     ap.add_argument("--stats", choices=("on", "off"),
                     help="show / hide the monitoring line")
+    ap.add_argument("--stats-bg", dest="stats_bg",
+                    choices=("off", "white", "black"),
+                    help="semi-transparent strip behind the text (30%% alpha)")
     a = ap.parse_args(argv)
     did = False
     if a.image is not None:
@@ -101,6 +104,9 @@ def apply_flags(argv):
     if a.stats is not None:
         cfgmod.update(show_stats=(a.stats == "on")); did = True
         print("Stats line:", a.stats)
+    if a.stats_bg is not None:
+        cfgmod.update(stats_bg=a.stats_bg); did = True
+        print("Stats background:", a.stats_bg)
     if not did:
         ap.print_help()
         print("\nService: zalman-display service install|start|stop|restart|status"
