@@ -242,6 +242,22 @@ class Display:
         self._bulk(b"\x00", tag="ov-term")
         self._bulk(b"\x00" * 16, tag="ov-tail")
 
+    def video_download(self, fps, count):
+        """0x02 SetVideoDownload — начать загрузку видео в флеш устройства.
+        Заголовок 16 байт: [0x02, fps, count>>8, count&0xFF, 0×12]
+        (в DLL: buf[1]=fps, buf[2:4]=count big-endian; подтверждено дампом:
+        241 и 118 кадров). Далее шлём count кадров 0x05, затем video_over();
+        устройство само зацикленно проигрывает залитое из флеша.
+        Так делает Windows — НЕ непрерывный стрим 0x05 (тот копит ~6МБ буфер
+        и вешает устройство)."""
+        self._bulk(bytes([0x02, fps & 0xFF, (count >> 8) & 0xFF, count & 0xFF])
+                   + b"\x00" * 12, tag="vid-dl")
+
+    def video_over(self):
+        """0x06 SetVideoOver — завершить загрузку -> устройство начинает
+        проигрывать залитое видео из флеша. Заголовок 16 байт: [0x06, 0×15]."""
+        self._bulk(bytes([0x06]) + b"\x00" * 15, tag="vid-over")
+
     def present(self):
         """Команда 0x00 (16 нулевых байт, len=0) — «commit/flush» конвейера
         дисплея. Windows шлёт её РАЗ В СЕКУНДУ внутрь потока 0x05 (в дампе 56
