@@ -24,8 +24,11 @@ sudo pacman -S python python-pillow python-numpy python-psutil ffmpeg
 ```bash
 git clone https://github.com/bl3xand/Zalman-linux
 cd Zalman-linux
-pip install --user .          # provides the `zalman-display` command
-# or run from source: python3 -m zalman_lcd <command>
+pipx install .                # recommended (provides the `zalman-display` command)
+# On Arch/PEP-668 systems `pip install --user .` is blocked; use pipx, or:
+#   pip install --user --break-system-packages .
+# Or skip install entirely and run from the source dir:
+#   python3 -m zalman_lcd <command>
 ```
 
 Device access without root (udev rule):
