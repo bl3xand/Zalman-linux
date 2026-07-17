@@ -70,10 +70,10 @@ def _lines(sensors):
     gpu = "GPU %s%% %s" % (gl if gl is not None else "--",
                           "--" if gt is None else "%d°" % gt)
     ram = "RAM %.1f / %.1f GB" % (used, total) if total else "RAM --"
-    return ["%s    %s" % (cpu, gpu), ram]
+    return [cpu, gpu, ram]      # 3 короткие строки -> крупный читаемый шрифт
 
 
-_MAX_SIZE = 20
+_MAX_SIZE = 24
 
 
 def _fixed_size(sensors):
@@ -83,14 +83,13 @@ def _fixed_size(sensors):
     if _fixed_size._cache:
         return _fixed_size._cache
     _, total = sensors.ram_gb()
-    t1 = "CPU 100% 100°    GPU 100% 100°"
-    t2 = "RAM %.1f / %.1f GB" % (total or 999.9, total or 999.9)
+    tmpl = ["CPU 100% 100°", "GPU 100% 100°",
+            "RAM %.1f / %.1f GB" % (total or 999.9, total or 999.9)]
     probe = ImageDraw.Draw(Image.new("RGBA", (2, 2)))
     size = _MAX_SIZE
     while size > 10:
         f = _font(size)
-        if max(probe.textlength(t1, font=f),
-               probe.textlength(t2, font=f)) <= SCREEN[0] - 8:
+        if max(probe.textlength(t, font=f) for t in tmpl) <= SCREEN[0] - 8:
             break
         size -= 1
     _fixed_size._cache = size

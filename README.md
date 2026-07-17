@@ -17,30 +17,31 @@ Protocol reverse-engineered from scratch — see [PROTOCOL.md](PROTOCOL.md).
 
 ## Requirements
 
-```bash
-# Arch
-sudo pacman -S python python-pillow python-numpy python-psutil ffmpeg
-#   Pillow/numpy/psutil — Python deps; ffmpeg — video only (cdc_acm is in the kernel)
-```
+- **Python 3.7+** and **pipx** (`sudo pacman -S python python-pipx`). pipx pulls
+  the Python deps (Pillow/numpy/psutil) automatically.
+- **ffmpeg** — only for **video** backgrounds (`sudo pacman -S ffmpeg`).
+- The USB serial driver `cdc_acm` is already in the kernel — nothing to install.
 
 ## Install
 
 ```bash
 git clone https://github.com/bl3xand/Zalman-linux
 cd Zalman-linux
-pipx install .                # recommended (provides the `zalman-display` command)
-# On Arch/PEP-668 systems `pip install --user .` is blocked; use pipx, or:
-#   pip install --user --break-system-packages .
-# Or skip install entirely and run from the source dir:
-#   python3 -m zalman_lcd <command>
+pipx install .                # installs the command + deps + bundled font
+zalman-display service install   # does the rest, automatically (see below)
 ```
 
-Device access without root (udev rule):
+`pipx install .` pulls in everything the tool needs (Pillow/numpy/psutil and the
+bundled font) — nothing to copy by hand. `ffmpeg` is only needed for **video**
+backgrounds (`sudo pacman -S ffmpeg`).
 
-```bash
-sudo cp 99-zalman-lcd.rules /etc/udev/rules.d/
-sudo udevadm control --reload && sudo udevadm trigger
-```
+`zalman-display service install` then sets up **everything** in one go:
+installs & enables the user service, starts it, turns on **linger** (so it runs
+from boot, before login), and installs the **udev rule** if the device isn't
+already accessible (asks for sudo once). Nothing else to do by hand.
+
+> On Arch/PEP-668, if you prefer plain pip: `pip install --user --break-system-packages .`
+> Or run straight from the source dir without installing: `python3 -m zalman_lcd <command>`
 
 ## Usage
 
@@ -63,14 +64,15 @@ Every setting applies **live** — the running service picks up the change (a ne
 background/rotation is re-uploaded to flash; brightness/color/position update
 immediately). Flags can be combined, e.g. `--rotate 90 --brightness 60`.
 
-## Autostart (service on boot)
+## Service
+
+`zalman-display service install` (above) is a **user** systemd service — it runs
+as you, no root daemon, reading your `~/.config`. It already enables **linger**
+so it starts at boot and survives logout. Manage it:
 
 ```bash
-zalman-display service install       # installs & enables the user service
-loginctl enable-linger $USER         # so it runs before you log in
+zalman-display service start|stop|restart|status|uninstall
 ```
-
-Manage it: `zalman-display service start|stop|restart|status`.
 
 ## Notes
 

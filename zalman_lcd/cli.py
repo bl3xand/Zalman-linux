@@ -3,6 +3,7 @@
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 
@@ -11,8 +12,13 @@ from . import device
 
 SERVICE = "zalman-display.service"
 USER_UNIT_DIR = os.path.expanduser("~/.config/systemd/user")
-UDEV_RULE = ('SUBSYSTEM=="usb", ATTR{idVendor}=="0483", '
-             'ATTR{idProduct}=="5740", MODE="0666", TAG+="uaccess"')
+UDEV_PATH = "/etc/udev/rules.d/99-zalman-lcd.rules"
+UDEV_RULE = (
+    '# Zalman Alpha 2 display (0483:5740) — доступ без root\n'
+    'SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", '
+    'MODE="0666", SYMLINK+="zalman_lcd"\n'
+    'SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="5740", '
+    'MODE="0666"\n')
 ROTATIONS = (0, 90, 180, 270)
 
 
@@ -130,24 +136,60 @@ def service_status():
         return "n/a"
 
 
+def _exe_cmd():
+    """Как запускать демона: установленный скрипт zalman-display, иначе модуль."""
+    exe = shutil.which("zalman-display")
+    if exe:
+        return exe + " run --quiet", None
+    # запуск из исходников — нужен WorkingDirectory
+    workdir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return "%s -m zalman_lcd run --quiet" % sys.executable, workdir
+
+
+def _install_udev():
+    """Поставить udev-правило (нужен sudo). Пропускаем, если доступ уже есть."""
+    if os.access("/dev/ttyACM0", os.W_OK) or os.path.isfile(UDEV_PATH):
+        return                       # доступ есть/правило стоит — sudo не трогаем
+    if not shutil.which("sudo"):
+        print("  (no sudo) udev rule not installed; run as root:")
+        print("   printf '%%s' '...' > %s" % UDEV_PATH)
+        return
+    print("Installing udev rule (sudo may ask for your password)…")
+    try:
+        p = subprocess.run(["sudo", "tee", UDEV_PATH], input=UDEV_RULE,
+                           text=True, stdout=subprocess.DEVNULL)
+        if p.returncode == 0:
+            subprocess.run(["sudo", "udevadm", "control", "--reload"])
+            subprocess.run(["sudo", "udevadm", "trigger"])
+            print("  udev rule installed.")
+        else:
+            print("  udev step skipped (sudo failed).")
+    except Exception as e:
+        print("  udev step skipped:", e)
+
+
 def install_service():
     os.makedirs(USER_UNIT_DIR, exist_ok=True)
-    workdir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    execstart, workdir = _exe_cmd()
     unit = (
         "[Unit]\nDescription=Zalman Alpha 2 display\n"
         "After=graphical-session.target\n\n"
-        "[Service]\nType=simple\nWorkingDirectory=%s\n"
-        "ExecStart=%s -m zalman_lcd run --quiet\nRestart=always\nRestartSec=3\n\n"
-        "[Install]\nWantedBy=default.target\n" % (workdir, sys.executable))
+        "[Service]\nType=simple\n"
+        + ("WorkingDirectory=%s\n" % workdir if workdir else "")
+        + "ExecStart=%s\nRestart=always\nRestartSec=3\n\n"
+        "[Install]\nWantedBy=default.target\n" % execstart)
     open(os.path.join(USER_UNIT_DIR, SERVICE), "w").write(unit)
     systemctl("daemon-reload")
     systemctl("enable", "--now", SERVICE)
-    print("Service installed and started (autostart enabled).")
-    print("Tip: `loginctl enable-linger $USER` to run before you log in.")
-    print("\nNo USB access? Install the udev rule (needs sudo):")
-    print("  echo '%s' | sudo tee /etc/udev/rules.d/99-zalman-lcd.rules"
-          % UDEV_RULE)
-    print("  sudo udevadm control --reload && sudo udevadm trigger")
+    # автозапуск до логина — включаем сами
+    try:
+        subprocess.run(["loginctl", "enable-linger", os.environ.get("USER", "")],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        pass
+    _install_udev()
+    print("Service installed, enabled and started (autostart on boot).")
+    print("Manage it: zalman-display service start|stop|restart|status")
 
 
 def cmd_service(argv):
