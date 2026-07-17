@@ -22,6 +22,8 @@ import tty as _tty
 
 import numpy as np
 
+from . import dbg
+
 VID_S, PID_S = "0483", "5740"
 W = H = 320
 N = W * H
@@ -101,8 +103,10 @@ def usb_reset():
         return False
     try:
         fcntl.ioctl(fd, _USBDEVFS_RESET, 0)
+        dbg.log("usb_reset OK on %s" % path)
         return True
-    except OSError:
+    except OSError as e:
+        dbg.log("usb_reset FAILED on %s: %s" % (path, e))
         return False
     finally:
         os.close(fd)
@@ -145,29 +149,50 @@ class Display:
         except Exception:
             os.close(self.fd)
             raise
+        dbg.log("tty opened %s | %s" % (self.path, dbg.usb_state()))
         self.wake()
 
     # --- транспорт (ядровый CDC через tty) ---
-    def _bulk(self, data, timeout=2.5):
+    # порог, выше которого запись считается «подозрительно медленной» и логируется
+    SLOW = 0.30
+
+    def _bulk(self, data, timeout=2.5, tag="?"):
         # Если устройство перестало забирать данные (залипание JPEG-декодера
-        # и т.п.), запись зависает -> ловим по таймауту и поднимаем DeviceError,
-        # демон делает usb_reset() и переподключается.
+        # и т.п.), запись зависает -> ловим по таймауту и поднимаем DeviceError
+        # с ПОДРОБНОСТЯМИ (стадия, сколько байт ушло, за сколько). Демон делает
+        # usb_reset() и переподключается.
         mv = memoryview(data)
+        n = len(mv)
         total = 0
-        deadline = time.time() + timeout
-        while total < len(mv):
+        t0 = time.time()
+        deadline = t0 + timeout
+        stalls = 0
+        while total < n:
             left = deadline - time.time()
             if left <= 0:
-                raise DeviceError("write timeout")
+                el = time.time() - t0
+                dbg.log("STALL/TIMEOUT stage=%s wrote=%d/%d elapsed=%.3fs "
+                        "stalls=%d | %s" % (tag, total, n, el, stalls,
+                                            dbg.usb_state()))
+                raise DeviceError("write timeout stage=%s %d/%d after %.2fs"
+                                  % (tag, total, n, el))
             _, w, _ = select.select([], [self.fd], [], left)
             if not w:
-                raise DeviceError("write timeout")
+                stalls += 1
+                continue
             try:
                 total += os.write(self.fd, mv[total:])
             except BlockingIOError:
+                stalls += 1
                 continue
             except OSError as e:
-                raise DeviceError("write error: %s" % e)
+                dbg.log("WRITE-ERR stage=%s wrote=%d/%d err=%s" % (tag, total, n, e))
+                raise DeviceError("write error stage=%s: %s" % (tag, e))
+        el = time.time() - t0
+        if el >= self.SLOW:
+            # ранний признак «устройство еле дышит» — ещё ДО полного зависания
+            dbg.log("SLOW-WRITE stage=%s bytes=%d elapsed=%.3fs stalls=%d | %s"
+                    % (tag, n, el, stalls, dbg.usb_state()))
         return total
 
     def _read(self, length=64, timeout=0.3):
@@ -183,8 +208,8 @@ class Display:
     def wake(self):
         """Пробуждение экрана после холодного старта."""
         try:
-            self._bulk(b"\x01HWCX-TECH-VRFY0"); self._read(); time.sleep(0.02)
-            self._bulk(b"\x01HWCX-TECH-VRFY1"); self._read(); time.sleep(0.02)
+            self._bulk(b"\x01HWCX-TECH-VRFY0", tag="vrfy0"); self._read(); time.sleep(0.02)
+            self._bulk(b"\x01HWCX-TECH-VRFY1", tag="vrfy1"); self._read(); time.sleep(0.02)
             b = bytearray(16); b[0] = 1
             for k in range(1, 16):
                 b[k] = random.randint(0, 255)
@@ -192,17 +217,18 @@ class Display:
             b[4] = ((b[2] + b[3]) & 0xFF) ^ b[1]
             b[9] = (~b[10]) & 0xFF
             b[11] = (-(sum(b[1:11]) & 0xFF)) & 0xFF
-            self._bulk(bytes(b)); self._read()
-        except DeviceError:
-            pass
+            self._bulk(bytes(b), tag="chal"); r = self._read()
+            dbg.log("wake -> %r" % r)
+        except DeviceError as e:
+            dbg.log("wake FAILED: %s" % e)
 
     def send_jpeg(self, jpg):
         """Кадр ФОНА (cmd 0x05): header + JPEG(добивка до 64) + байт 0x00."""
         pad = (-len(jpg)) % 64
         self._bulk(bytes([0x05, 0, 0, 0]) + struct.pack("<I", len(jpg))
-                   + b"\x00" * 8)
-        self._bulk(jpg + b"\x00" * pad)
-        self._bulk(b"\x00")
+                   + b"\x00" * 8, tag="bg-hdr")
+        self._bulk(jpg + b"\x00" * pad, tag="bg-body")
+        self._bulk(b"\x00", tag="bg-term")
 
     def send_overlay(self, u32):
         """Строка ОВЕРЛЕЯ (cmd 0x07, RLE+альфа): header + тело(добивка 64) +
@@ -211,15 +237,16 @@ class Display:
         clen = len(body)
         pad = (-clen) % 64
         self._bulk(bytes([0x07, 0x03, 0, 0]) + struct.pack("<I", clen)
-                   + struct.pack("<HHHH", 0, 0, W, H))
-        self._bulk(body + b"\x00" * pad)
-        self._bulk(b"\x00")
-        self._bulk(b"\x00" * 16)
+                   + struct.pack("<HHHH", 0, 0, W, H), tag="ov-hdr")
+        self._bulk(body + b"\x00" * pad, tag="ov-body")
+        self._bulk(b"\x00", tag="ov-term")
+        self._bulk(b"\x00" * 16, tag="ov-tail")
 
     def brightness(self, value, rotate=0xFF):
         v = 0xFF if value is None else (0xFF if value > 100
                                         else (value * 90) // 100 + 10)
-        self._bulk(bytes([CMD_ROTATE, rotate & 0xFF, v & 0xFF]) + b"\x00" * 13)
+        self._bulk(bytes([CMD_ROTATE, rotate & 0xFF, v & 0xFF]) + b"\x00" * 13,
+                   tag="bright")
 
     def close(self):
         # ВАЖНО: сбросить буферы ДО close(). Если устройство залипло и не

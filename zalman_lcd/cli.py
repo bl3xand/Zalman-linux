@@ -242,9 +242,27 @@ def main(argv=None):
         return cmd_service(argv[1:])
     if head == "detect":
         return cmd_detect()
+    if head == "log":
+        return cmd_log(argv[1:])
     if head in ("menu", "-i"):
         return menu()
     return apply_flags(argv)
+
+
+def cmd_log(argv):
+    """Показать диагностический лог (для отладки зависаний)."""
+    from . import dbg
+    path = dbg.LOG_PATH
+    if not os.path.isfile(path):
+        print("no log yet:", path)
+        return 0
+    if argv and argv[0] in ("-f", "--follow"):
+        os.execvp("tail", ["tail", "-n", "80", "-f", path])
+    print(path, "\n" + "-" * 60)
+    with open(path) as f:
+        lines = f.readlines()
+    sys.stdout.write("".join(lines[-200:]))
+    return 0
 
 
 if __name__ == "__main__":

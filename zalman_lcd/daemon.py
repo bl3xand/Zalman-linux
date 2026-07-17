@@ -12,6 +12,7 @@ import time
 from PIL import Image, ImageSequence
 
 from . import config as cfgmod
+from . import dbg
 from . import device
 from . import sources
 from .render import StatsBar, to_u32
@@ -149,7 +150,12 @@ class Daemon:
     def _overlay_u32(self):
         """Оверлей строки; перекодируем только когда значения изменились."""
         from .render import _lines as fmt
-        key = (tuple(fmt(self.sensors)), self.cfg.get("rotate", 0),
+        ts = time.time()
+        lines = tuple(fmt(self.sensors))
+        sd = time.time() - ts
+        if sd >= 0.2:
+            dbg.log("SLOW-SENSORS %.3fs" % sd)
+        key = (lines, self.cfg.get("rotate", 0),
                self.cfg.get("text_color"), self.cfg.get("position"))
         if key != self._ov_key:
             self._ov_cache = to_u32(self._rot_img(self.stats.image()))
@@ -166,6 +172,8 @@ class Daemon:
     def run(self):
         signal.signal(signal.SIGTERM, self._stop)
         signal.signal(signal.SIGINT, self._stop)
+        dbg.enable(to_stderr=self.verbose)
+        dbg.log("daemon start | %s" % dbg.usb_state())
         fails = 0
         while self.running:
             try:
@@ -174,25 +182,33 @@ class Daemon:
             except device.DeviceError as e:
                 fails += 1
                 self.log("устройство отвалилось (%s)" % e)
+                dbg.log("RECONNECT reason=%s fails=%d | %s"
+                        % (e, fails, dbg.usb_state()))
                 # Первый сбой — просто переоткрыть. Повторный — устройство
                 # залипло: аппаратный сброс USB снимает залипание без
                 # физического отключения питания.
                 if fails >= 2 and device.available():
                     self.log("сброс USB-устройства…")
+                    dbg.log("usb_reset attempt (fails=%d)" % fails)
                     if device.usb_reset():
-                        device.wait_tty(8.0)
+                        p = device.wait_tty(8.0)
+                        dbg.log("after reset: tty=%s | %s" % (p, dbg.usb_state()))
                         fails = 0
                     else:
                         self.log("сброс не удался (нет прав на /dev/bus/usb?)")
                 self._sleep(0.5)
             except Exception as e:
                 self.log("ошибка:", e, "— повтор через 2с")
+                dbg.log("UNEXPECTED %s: %s" % (type(e).__name__, e))
                 self._sleep(2)
         if self._video:
             self._video.close()
         self.log("остановлен")
 
     def _session(self):
+        frames = 0
+        ov_count = 0
+        sess_t0 = time.time()
         dev = device.Display()
         self.log("устройство открыто (cdc)")
         try:
@@ -200,6 +216,12 @@ class Daemon:
             self._last_brightness = None
             last_bg = 0.0
             last_ov = 0.0
+            hb_t = sess_t0
+            hb_frames = 0
+            dbg.log("session begin: animated=%s fps=%s stats=%s bg_frames=%s "
+                    "rss=%.0fMB" % (self._animated, self._fps, self.stats.show,
+                                    (len(self._jpegs) if self._jpegs else "vid"),
+                                    dbg.rss_mb()))
             while self.running:
                 self._reload_if_changed()
                 self._apply_brightness(dev)
@@ -208,18 +230,40 @@ class Daemon:
                 # (залипло). Продолжать слать в залипший fd бесполезно —
                 # пробрасываем наверх, run() сделает usb_reset + переподключение.
                 if self._animated:
-                    dev.send_jpeg(self._next_bg())
+                    te = time.time()
+                    frame = self._next_bg()
+                    enc = time.time() - te
+                    if enc >= 0.15:
+                        dbg.log("SLOW-ENCODE %.3fs size=%d" % (enc, len(frame)))
+                    dev.send_jpeg(frame)
+                    frames += 1
+                    hb_frames += 1
                 elif self._bg_dirty or now - last_bg >= KEEPALIVE:
                     dev.send_jpeg(self._next_bg())
                     self._bg_dirty = False
                     last_bg = now
+                    frames += 1
+                    hb_frames += 1
                 # статы — раз в ~секунду (как Windows), оверлей держится сам
                 if self.stats.show and now - last_ov >= STATS_INTERVAL:
                     dev.send_overlay(self._overlay_u32())
                     last_ov = now
+                    ov_count += 1
+                # пульс раз в 5с: кадры, fps, память — видно деградацию
+                if now - hb_t >= 5.0:
+                    dbg.log("hb frames=%d ov=%d fps=%.1f rss=%.0fMB | %s"
+                            % (frames, ov_count, hb_frames / (now - hb_t),
+                               dbg.rss_mb(), dbg.usb_state()))
+                    hb_t = now
+                    hb_frames = 0
                 self._sleep((1.0 / max(1, self._fps)) if self._animated else 0.25)
         finally:
+            dur = time.time() - sess_t0
+            dbg.log("session end: frames=%d ov=%d dur=%.1fs avg_fps=%.1f"
+                    % (frames, ov_count, dur, frames / dur if dur else 0))
+            tc = time.time()
             dev.close()
+            dbg.log("closed in %.3fs" % (time.time() - tc))
 
     def _stop(self, *a):
         self.running = False

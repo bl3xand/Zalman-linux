@@ -119,4 +119,20 @@ see a freeze:
 - If a background looks pixelated, it is being cropped to 320×320; use a roughly
   square source for best results.
 
+**Diagnosing a freeze.** The daemon writes a timestamped log to
+`~/.config/zalman-lcd/zalman.log` (always on, even under the service). It records
+each stall with the exact stage it hung on (`bg-hdr` / `bg-body` / `bg-term` /
+`ov-*` / `bright` / `vrfy*`), how many bytes went out, the elapsed time, a 5-second
+heartbeat (frames, fps, memory), `SLOW-WRITE` early-warnings, and every USB-reset
+recovery. After a freeze, view it with:
+
+```bash
+zalman-display log        # last ~200 lines
+zalman-display log -f     # live tail
+```
+
+A `stage=bg-term` stall means the display's JPEG decoder hung on the frame it just
+received (see the COM-marker note above); a stall on `bg-hdr`/`bright` means the
+link was already wedged before that frame.
+
 License: MIT.
