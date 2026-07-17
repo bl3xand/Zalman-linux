@@ -1,6 +1,7 @@
 # Zalman Alpha2 DS LCD Linux Driver
 
-# zalman-display
+
+# zalman display
 
 Driver and CLI service for the **Zalman Alpha 2** AIO **LCD** (320×320) on
 **Linux** — a replacement for the Windows-only «Zalman OZ». Shows an
