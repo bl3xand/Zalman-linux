@@ -29,3 +29,7 @@ zalman-display = "zalman_lcd.cli:main"
 
 [tool.setuptools]
 packages = ["zalman_lcd"]
+
+[tool.setuptools.package-data]
+# bundle the JetBrains Mono font (OFL) so it ships with pip installs
+zalman_lcd = ["fonts/*.ttf", "fonts/*.txt"]

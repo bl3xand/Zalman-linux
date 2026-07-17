@@ -17,6 +17,12 @@ SCREEN = (320, 320)
 
 
 def _find_font_file():
+    # 1) вложенный в проект JetBrains Mono Bold (моноширинный, OFL) — есть всегда
+    bundled = os.path.join(os.path.dirname(__file__), "fonts",
+                           "JetBrainsMono-Bold.ttf")
+    if os.path.isfile(bundled):
+        return bundled
+    # 2) фолбэк на системные шрифты
     for c in ("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
               "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
               "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -67,6 +73,33 @@ def _lines(sensors):
     return ["%s    %s" % (cpu, gpu), ram]
 
 
+_MAX_SIZE = 20
+
+
+def _fixed_size(sensors):
+    """Наибольший кегль (<= _MAX_SIZE), при котором «худшие» строки (макс. цифры)
+    влезают по ширине. Считается ОДИН РАЗ и кэшируется — поэтому текст НЕ
+    сжимается при 6°->10° и т.п."""
+    if _fixed_size._cache:
+        return _fixed_size._cache
+    _, total = sensors.ram_gb()
+    t1 = "CPU 100% 100°    GPU 100% 100°"
+    t2 = "RAM %.1f / %.1f GB" % (total or 999.9, total or 999.9)
+    probe = ImageDraw.Draw(Image.new("RGBA", (2, 2)))
+    size = _MAX_SIZE
+    while size > 10:
+        f = _font(size)
+        if max(probe.textlength(t1, font=f),
+               probe.textlength(t2, font=f)) <= SCREEN[0] - 8:
+            break
+        size -= 1
+    _fixed_size._cache = size
+    return size
+
+
+_fixed_size._cache = 0
+
+
 class StatsBar:
     def __init__(self, cfg, sensors):
         self.sensors = sensors
@@ -83,13 +116,7 @@ class StatsBar:
         lines = _lines(self.sensors)
         img = Image.new("RGBA", SCREEN, (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
-        size = 22
-        while size >= 13:
-            f = _font(size)
-            if max(d.textlength(t, font=f) for t in lines) <= SCREEN[0] - 8:
-                break
-            size -= 1
-        f = _font(size)
+        f = _font(_fixed_size(self.sensors))    # постоянный размер
         asc, desc = f.getmetrics()
         lh = asc + desc                 # полная высота строки (без приплюснутости)
         pad, gap = 6, 8

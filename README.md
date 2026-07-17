@@ -12,7 +12,7 @@ Protocol reverse-engineered from scratch — see [PROTOCOL.md](PROTOCOL.md).
   the device then loops it on its own. This matches the Windows app and avoids
   the freeze that continuous streaming causes (the device's `0x05` buffer is
   ~6 MB and wedges if streamed to indefinitely).
-- The stats line is a transparent overlay drawn on top, refreshed ~once/second.
+- The stats line is a transparent overlay drawn on top, refreshed every 2 s.
 - Animated backgrounds are limited to ~360 frames / ≈5 MB (the flash buffer).
 
 ## Requirements
@@ -82,6 +82,10 @@ Manage it: `zalman-display service start|stop|restart|status`.
   shown as `--` if unavailable.
 - The separate USB device `0145:2001` is the pump/fan/RGB controller (HID); it
   is not handled here.
+- The stats font (**JetBrains Mono Bold**, SIL OFL) is bundled in
+  `zalman_lcd/fonts/` — no system font needed; monospace keeps the digits from
+  shifting. The daemon falls back to a system sans if the bundled file is
+  missing.
 
 ## Troubleshooting
 
@@ -109,8 +113,8 @@ see a freeze:
 **Diagnosing a freeze.** The daemon writes a timestamped log to
 `~/.config/zalman-lcd/zalman.log` (always on, even under the service). It records
 each stall with the exact stage it hung on (`bg-hdr` / `bg-body` / `bg-term` /
-`ov-*` / `bright` / `vrfy*`), how many bytes went out, the elapsed time, a 5-second
-heartbeat (frames, fps, memory), `SLOW-WRITE` early-warnings, and every USB-reset
+`ov-*` / `bright` / `vrfy*`), how many bytes went out, the elapsed time, a 30-second
+heartbeat (overlays, memory), `SLOW-WRITE` early-warnings, and every USB-reset
 recovery. After a freeze, view it with:
 
 ```bash
@@ -123,4 +127,5 @@ received (see the COM-marker note above); a stall on `bg-hdr`/`bright` means the
 link was already wedged before that frame. The log is capped (~1 MB, one `.1`
 rollover) so it never fills the disk.
 
-License: MIT.
+License: MIT. Bundled font **JetBrains Mono** is under the SIL Open Font License
+(see `zalman_lcd/fonts/OFL.txt`).

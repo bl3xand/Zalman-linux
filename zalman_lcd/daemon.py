@@ -22,7 +22,7 @@ _ROT = {0: None, 90: Image.ROTATE_90, 180: Image.ROTATE_180,
         270: Image.ROTATE_270}
 MAX_FRAMES = 360            # флеш-буфер устройства ~6МБ -> ограничиваем набор
 MAX_UPLOAD_BYTES = 5_000_000  # суммарно кадров не больше ~5МБ (буфер ~6МБ)
-STATS_INTERVAL = 1.0        # раз в секунду: present(0x00) + оверлей (как Windows)
+STATS_INTERVAL = 2.0        # раз в 2с: present(0x00) + оверлей (реже перерисовка)
 STALL_ESCALATE = 12         # столько кадров подряд застряло -> reconnect+usb_reset
 HEARTBEAT = 30.0            # как часто писать строку пульса в лог
 
