@@ -9,19 +9,40 @@ import time
 
 _fh = None
 _to_stderr = False
+_path = None
+_written = 0
 LOG_PATH = os.path.expanduser("~/.config/zalman-lcd/zalman.log")
+MAX_LOG_BYTES = 1_000_000       # кап на файл лога; при превышении — ротация
 
 
 def enable(to_stderr=True, path=LOG_PATH):
-    global _fh, _to_stderr
+    global _fh, _to_stderr, _path, _written
     _to_stderr = to_stderr
+    _path = path
     if _fh is None:
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             _fh = open(path, "a", buffering=1)  # line-buffered
+            _written = _fh.tell()
         except OSError:
             _fh = None
     log("=== log started (pid %d) ===" % os.getpid())
+
+
+def _rotate():
+    """Файл лога переполнен — сохраняем одну прошлую копию (.1) и начинаем заново.
+    Диск ограничен ~2×MAX_LOG_BYTES."""
+    global _fh, _written
+    try:
+        _fh.close()
+        os.replace(_path, _path + ".1")
+    except OSError:
+        pass
+    try:
+        _fh = open(_path, "a", buffering=1)
+        _written = 0
+    except OSError:
+        _fh = None
 
 
 def log(*a):
@@ -33,6 +54,10 @@ def log(*a):
     if _fh is not None:
         try:
             _fh.write(msg + "\n")
+            global _written
+            _written += len(msg) + 1
+            if _written >= MAX_LOG_BYTES:
+                _rotate()
         except OSError:
             pass
     if _to_stderr:

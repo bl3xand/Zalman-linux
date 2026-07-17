@@ -25,6 +25,7 @@ MAX_UPLOAD_BYTES = 5_000_000  # суммарно кадров не больше 
 STATS_INTERVAL = 1.0        # обновлять статы раз в ~секунду (как Windows)
 PRESENT_INTERVAL = 1.0      # команда 0x00 (commit/flush) раз в секунду (как Windows)
 STALL_ESCALATE = 12         # столько кадров подряд застряло -> reconnect+usb_reset
+HEARTBEAT = 30.0            # как часто писать строку пульса в лог
 
 
 MAX_JPEG = 14000            # держим кадр в диапазоне Windows (~6..15КБ)
@@ -125,16 +126,16 @@ class Daemon:
 
     def _frames_image(self, path):
         """Картинка/GIF -> список JPEG (по одному кадру за раз, без хранения RGB)."""
-        im = Image.open(path)
-        total = getattr(im, "n_frames", 1)
-        take = min(total, MAX_FRAMES)
-        step = total / take if take else 1
-        want = {int(i * step) for i in range(take)}
         jpegs, durs = [], []
-        for idx, fr in enumerate(ImageSequence.Iterator(im)):
-            if idx in want:
-                jpegs.append(_jpeg(self._rot_img(sources.fit(fr))))
-                durs.append(max(20, fr.info.get("duration", 100)))
+        with Image.open(path) as im:
+            total = getattr(im, "n_frames", 1)
+            take = min(total, MAX_FRAMES)
+            step = total / take if take else 1
+            want = {int(i * step) for i in range(take)}
+            for idx, fr in enumerate(ImageSequence.Iterator(im)):
+                if idx in want:
+                    jpegs.append(_jpeg(self._rot_img(sources.fit(fr))))
+                    durs.append(max(20, fr.info.get("duration", 100)))
         if not jpegs:
             jpegs = [_jpeg(Image.new("RGB", (320, 320), (0, 0, 0)))]
         if len(jpegs) > 1 and durs:
@@ -295,9 +296,9 @@ class Daemon:
                         raise
                     self._sleep(0.1)
                     continue
-                # пульс раз в 5с
-                if now - hb_t >= 5.0:
-                    dbg.log("hb ov=%d/5s stalls=%d rss=%.0fMB | %s"
+                # пульс в лог (редко — чтобы не забивать диск)
+                if now - hb_t >= HEARTBEAT:
+                    dbg.log("hb ov=%d stalls=%d rss=%.0fMB | %s"
                             % (hb_frames, stalls_total, dbg.rss_mb(),
                                dbg.usb_state()))
                     hb_t = now

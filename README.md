@@ -8,8 +8,12 @@ autostart service.
 
 Protocol reverse-engineered from scratch — see [PROTOCOL.md](PROTOCOL.md).
 
-- Background is streamed as **JPEG** (compressed → smooth, ~20–30 fps).
-- Stats line is a transparent overlay on top, refreshed once per second.
+- The background (image/GIF/video) is **uploaded to the device's flash once**;
+  the device then loops it on its own. This matches the Windows app and avoids
+  the freeze that continuous streaming causes (the device's `0x05` buffer is
+  ~6 MB and wedges if streamed to indefinitely).
+- The stats line is a transparent overlay drawn on top, refreshed ~once/second.
+- Animated backgrounds are limited to ~360 frames / ≈5 MB (the flash buffer).
 
 ## Requirements
 
@@ -136,6 +140,7 @@ zalman-display log -f     # live tail
 
 A `stage=bg-term` stall means the display's JPEG decoder hung on the frame it just
 received (see the COM-marker note above); a stall on `bg-hdr`/`bright` means the
-link was already wedged before that frame.
+link was already wedged before that frame. The log is capped (~1 MB, one `.1`
+rollover) so it never fills the disk.
 
 License: MIT.
