@@ -74,7 +74,7 @@ def _lines(sensors):
 
 
 _MAX_SIZE = 26
-_RAM_RATIO = 1.5            # CPU/GPU крупнее RAM во столько раз
+_RAM_RATIO = 1.3            # CPU/GPU крупнее RAM во столько раз
 
 
 def _sizes(sensors):
